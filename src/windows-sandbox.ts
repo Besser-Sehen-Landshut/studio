@@ -36,6 +36,12 @@ import {
   writeStateFile,
 } from './paths.js';
 import type { Claude } from './ports.js';
+import {
+  type LockdownPlan,
+  lockdownPlan,
+  lockdownSection,
+  POINT_AND_PRINT,
+} from './relay-lockdown.js';
 import { FOLDER_FUNCTIONS } from './relay-windows.js';
 
 /**
@@ -160,6 +166,8 @@ export function windowsSetupScript(o: {
   readPaths: readonly string[];
   /** Places an earlier setup may have opened for writing (the crew Claude config dir): closed first. */
   revokePaths?: readonly string[];
+  /** The network lockdown of the crew users' group (relay-lockdown.ts); null for `--no-firewall`. */
+  lockdown?: LockdownPlan | null;
 }): string {
   if (!CREW_PREFIX_RE.test(o.prefix)) {
     throw new Error(`not a crew user prefix (at most 13 characters): ${o.prefix}`);
@@ -186,7 +194,7 @@ SafeFolder $crewDir (Split-Path -Parent $crewDir)
 StrictFolder $crewDir @()
 StrictFolder (Join-Path $crewDir 'tmp') @()
 Copy-Item -LiteralPath ${psQuote(TREE_SOURCE())} -Destination (Join-Path $crewDir 'studio-tree.cs') -Force
-${crewGroupFinish()}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
+${crewGroupFinish()}${lockdownSection(o.lockdown === undefined ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o.lockdown, '@($groupSid)')}${POINT_AND_PRINT}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
 `;
 }
 

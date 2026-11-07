@@ -25,6 +25,13 @@ import {
 } from './crew-accounts.js';
 import { ipv4 } from './egress-proxy.js';
 import type { Neighbor } from './relay-hosts.js';
+import {
+  type LockdownPlan,
+  lockdownPlan,
+  lockdownSection,
+  POINT_AND_PRINT,
+  POINT_AND_PRINT_KEY,
+} from './relay-lockdown.js';
 import { powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
 
 /** Every path here is a Windows path, also where tests run elsewhere (with POSIX folders). */
@@ -422,6 +429,11 @@ export function relaySetupScript(o: {
    * written into sshd_config, and an inbound rule that lets only `scope` reach sshd.
    */
   install?: RelayInstall;
+  /**
+   * The network lockdown (relay-lockdown.ts): its rules, or null for `--no-firewall`; by default the
+   * local ranges alone.
+   */
+  lockdown?: LockdownPlan | null;
 }): string {
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o.relayUser)) {
     throw new Error(`not a local user name: ${o.relayUser}`);
@@ -489,7 +501,7 @@ icacls ${psQuote(machineStudio(o.machine))} /reset /T /C /L /Q | Out-Null
 StrictFolder (Join-Path $machine 'broker\\tmp') @()
 # What the group carries, and the crew users of earlier versions or a crash go: with the tree
 # deleter compiled from the admin-only copy just made.
-${crewGroupFinish()}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
+${crewGroupFinish()}${lockdownSection(o.lockdown === undefined ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o.lockdown, '@($relaySid, $groupSid)')}${POINT_AND_PRINT}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
 # the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
 # point among them or just below the home.
 StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
@@ -534,7 +546,7 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Set-Service -Name WebClient -StartupType Disabled
 }
 # What this machine had before, and what the install did: studio relay uninstall reads it.
-${recordSnippet({ machine: o.machine, spoolerDisabled: o.install?.disableSpooler === true })}# The pinned plugins in the crew Claude config dir of the relay home.
+${recordSnippet({ machine: o.machine, spoolerDisabled: o.install?.disableSpooler === true, firewall: o.lockdown !== null })}# The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
 ${o.install === undefined ? setupTail(block) : installTail(block, o.install)}`;
 }
@@ -640,29 +652,32 @@ $priorRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction Sile
 $priorSshdRule = if ($null -eq $priorRule) { @{ exists = $false } } else { @{ exists = $true; enabled = [string]$priorRule.Enabled } }
 $priorSshdCapability = $null
 $priorMachine = Test-Path -LiteralPath ${psQuote(machine)}
+$pnpValue = (Get-ItemProperty -LiteralPath '${POINT_AND_PRINT_KEY}' -Name RestrictDriverInstallationToAdministrators -ErrorAction SilentlyContinue).RestrictDriverInstallationToAdministrators
+$priorPnp = if ($null -eq $pnpValue) { @{ exists = $false } } else { @{ exists = $true; value = [int]$pnpValue } }
 `;
 
 /**
- * PowerShell that writes the install record (admin-only, nobody else reads it). The state before
+ * PowerShell that writes the install record (admin-only; the relay account reads it). The state before
  * Studio comes from the first install and is kept by every later one; an admin-only tree an
  * earlier version made without a record leaves it unknown, and uninstall then restores nothing.
  */
 const recordSnippet = (o: {
   machine: string;
   spoolerDisabled: boolean;
+  firewall: boolean;
 }) => `$recordFile = ${psQuote(installRecordFile(o.machine))}
 $old = $null
 if (Test-Path -LiteralPath $recordFile) { try { $old = Get-Content -Raw -LiteralPath $recordFile | ConvertFrom-Json } catch { $old = $null } }
 if ($null -ne $old) { $prior = $old.prior }
 elseif ($priorMachine) { $prior = $null }
-else { $prior = @{ webClient = $priorWebClient; spooler = $priorSpooler; sshd = $priorSshd; sshdRule = $priorSshdRule; sshdCapability = $priorSshdCapability } }
-$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o.spoolerDisabled ? '$true' : '$false'} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); prior = $prior }
+else { $prior = @{ webClient = $priorWebClient; spooler = $priorSpooler; sshd = $priorSshd; sshdRule = $priorSshdRule; sshdCapability = $priorSshdCapability; pointAndPrint = $priorPnp } }
+$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o.spoolerDisabled ? '$true' : '$false'} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); firewall = ${o.firewall ? '$true' : '$false'}; prior = $prior }
 $tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
 [IO.File]::WriteAllText($tmp, (ConvertTo-Json -Compress -Depth 6 $record), (New-Object Text.ASCIIEncoding))
-icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
 if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $recordFile" }
 if (Test-Path -LiteralPath $recordFile) { [IO.File]::Replace($tmp, $recordFile, [NullString]::Value) } else { [IO.File]::Move($tmp, $recordFile) }
-icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
 `;
 
 const installHead = (

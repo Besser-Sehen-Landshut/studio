@@ -1007,14 +1007,14 @@ var require_foldFlowLines = __commonJS({
     var FOLD_FLOW = "flow";
     var FOLD_BLOCK = "block";
     var FOLD_QUOTED = "quoted";
-    function foldFlowLines(text, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
+    function foldFlowLines(text2, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
       if (!lineWidth || lineWidth < 0)
-        return text;
+        return text2;
       if (lineWidth < minContentWidth)
         minContentWidth = 0;
       const endStep = Math.max(1 + minContentWidth, 1 + lineWidth - indent.length);
-      if (text.length <= endStep)
-        return text;
+      if (text2.length <= endStep)
+        return text2;
       const folds = [];
       const escapedFolds = {};
       let end = lineWidth - indent.length;
@@ -1031,14 +1031,14 @@ var require_foldFlowLines = __commonJS({
       let escStart = -1;
       let escEnd = -1;
       if (mode === FOLD_BLOCK) {
-        i2 = consumeMoreIndentedLines(text, i2, indent.length);
+        i2 = consumeMoreIndentedLines(text2, i2, indent.length);
         if (i2 !== -1)
           end = i2 + endStep;
       }
-      for (let ch; ch = text[i2 += 1]; ) {
+      for (let ch; ch = text2[i2 += 1]; ) {
         if (mode === FOLD_QUOTED && ch === "\\") {
           escStart = i2;
-          switch (text[i2 + 1]) {
+          switch (text2[i2 + 1]) {
             case "x":
               i2 += 3;
               break;
@@ -1055,12 +1055,12 @@ var require_foldFlowLines = __commonJS({
         }
         if (ch === "\n") {
           if (mode === FOLD_BLOCK)
-            i2 = consumeMoreIndentedLines(text, i2, indent.length);
+            i2 = consumeMoreIndentedLines(text2, i2, indent.length);
           end = i2 + indent.length + endStep;
           split2 = void 0;
         } else {
           if (ch === " " && prev && prev !== " " && prev !== "\n" && prev !== "	") {
-            const next = text[i2 + 1];
+            const next = text2[i2 + 1];
             if (next && next !== " " && next !== "\n" && next !== "	")
               split2 = i2;
           }
@@ -1072,12 +1072,12 @@ var require_foldFlowLines = __commonJS({
             } else if (mode === FOLD_QUOTED) {
               while (prev === " " || prev === "	") {
                 prev = ch;
-                ch = text[i2 += 1];
+                ch = text2[i2 += 1];
                 overflow = true;
               }
               const j = i2 > escEnd + 1 ? i2 - 2 : escStart - 1;
               if (escapedFolds[j])
-                return text;
+                return text2;
               folds.push(j);
               escapedFolds[j] = true;
               end = j + endStep;
@@ -1092,39 +1092,39 @@ var require_foldFlowLines = __commonJS({
       if (overflow && onOverflow)
         onOverflow();
       if (folds.length === 0)
-        return text;
+        return text2;
       if (onFold)
         onFold();
-      let res = text.slice(0, folds[0]);
+      let res = text2.slice(0, folds[0]);
       for (let i3 = 0; i3 < folds.length; ++i3) {
         const fold = folds[i3];
-        const end2 = folds[i3 + 1] || text.length;
+        const end2 = folds[i3 + 1] || text2.length;
         if (fold === 0)
           res = `
-${indent}${text.slice(0, end2)}`;
+${indent}${text2.slice(0, end2)}`;
         else {
           if (mode === FOLD_QUOTED && escapedFolds[fold])
-            res += `${text[fold]}\\`;
+            res += `${text2[fold]}\\`;
           res += `
-${indent}${text.slice(fold + 1, end2)}`;
+${indent}${text2.slice(fold + 1, end2)}`;
         }
       }
       return res;
     }
-    function consumeMoreIndentedLines(text, i2, indent) {
+    function consumeMoreIndentedLines(text2, i2, indent) {
       let end = i2;
       let start2 = i2 + 1;
-      let ch = text[start2];
+      let ch = text2[start2];
       while (ch === " " || ch === "	") {
         if (i2 < start2 + indent) {
-          ch = text[++i2];
+          ch = text2[++i2];
         } else {
           do {
-            ch = text[++i2];
+            ch = text2[++i2];
           } while (ch && ch !== "\n");
           end = i2;
           start2 = i2 + 1;
-          ch = text[start2];
+          ch = text2[start2];
         }
       }
       return end;
@@ -17206,8 +17206,8 @@ function ko_default() {
 }
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/lt.js
-var capitalizeFirstCharacter = (text) => {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+var capitalizeFirstCharacter = (text2) => {
+  return text2.charAt(0).toUpperCase() + text2.slice(1);
 };
 function getUnitTypeFromNumber(number4) {
   const abs = Math.abs(number4);
@@ -27934,18 +27934,18 @@ var boardPath = (dir) => join(dir, ".studio", "board.yaml");
 var boardFile = boardPath;
 function loadBoard(dir, config2) {
   const file4 = boardFile(dir);
-  let text;
+  let text2;
   try {
-    text = readFileSync(file4, "utf8");
+    text2 = readFileSync(file4, "utf8");
   } catch (e) {
     throw new BoardError(file4, `cannot read file (${e.message})`);
   }
-  return parseBoard(text, file4, config2);
+  return parseBoard(text2, file4, config2);
 }
-function parseBoard(text, file4, config2) {
+function parseBoard(text2, file4, config2) {
   let raw;
   try {
-    raw = (0, import_yaml.parse)(text);
+    raw = (0, import_yaml.parse)(text2);
   } catch (e) {
     throw new BoardError(file4, `invalid YAML (${e.message})`);
   }
@@ -29227,8 +29227,8 @@ function availableVersions(stdout) {
       dropped.push(id ?? "(an entry without a plain id)");
       continue;
     }
-    const text = Object.values(e).filter((x) => typeof x === "string").join(" ");
-    offered.set(id, { version: v, security: e.security === true || ADVISORY.test(text) });
+    const text2 = Object.values(e).filter((x) => typeof x === "string").join(" ");
+    offered.set(id, { version: v, security: e.security === true || ADVISORY.test(text2) });
   }
   return { offered, dropped };
 }
@@ -29284,15 +29284,15 @@ function strictFlat(map2) {
   return clean7;
 }
 function frontmatterName(file4) {
-  let text;
+  let text2;
   try {
     if (statSync(file4).size > MAX_SKILL_BYTES) return { kind: "invalid" };
-    text = readFileSync2(file4, "utf8");
+    text2 = readFileSync2(file4, "utf8");
   } catch {
     return { kind: "invalid" };
   }
-  if (text.startsWith("\uFEFF")) text = text.slice(1);
-  const lines2 = text.split("\n").map((l) => l.replace(/\r$/, ""));
+  if (text2.startsWith("\uFEFF")) text2 = text2.slice(1);
+  const lines2 = text2.split("\n").map((l) => l.replace(/\r$/, ""));
   const first = lines2.findIndex((l) => l.trim() !== "");
   if (first < 0 || !(lines2[first] ?? "").trimStart().startsWith("---")) return { kind: "none" };
   if (first !== 0 || lines2[0] !== "---") return { kind: "invalid" };
@@ -29425,13 +29425,13 @@ var Out = class {
   constructor(meaningful2) {
     this.meaningful = meaningful2;
   }
-  push(kind, text, opts = {}) {
-    if (text === "") return;
+  push(kind, text2, opts = {}) {
+    if (text2 === "") return;
     if (kind === "comment") {
-      const m = opts.meaningful === true || this.meaningful(text);
+      const m = opts.meaningful === true || this.meaningful(text2);
       this.segs.push({
         kind,
-        text,
+        text: text2,
         ...m ? { meaningful: true } : {},
         ...opts.eol === true ? { eol: true } : {}
       });
@@ -29439,8 +29439,8 @@ var Out = class {
     }
     const last = this.segs.at(-1);
     if (last !== void 0 && last.kind === kind && (kind === "ws" || kind === "code")) {
-      last.text += text;
-    } else this.segs.push({ kind, text });
+      last.text += text2;
+    } else this.segs.push({ kind, text: text2 });
   }
 };
 
@@ -30057,19 +30057,19 @@ function tokenizeYaml(s) {
       i2++;
     }
     if (comment !== void 0) out.push("comment", comment, { eol: true });
-    const text = line4.slice(indent, codeEnd).trimEnd();
-    const lead = /^(?:[-?:](?:[ \t]+|$))*/.exec(text);
+    const text2 = line4.slice(indent, codeEnd).trimEnd();
+    const lead = /^(?:[-?:](?:[ \t]+|$))*/.exec(text2);
     const content = indent + lead[0].length;
-    const bare = text.replace(/(?:[ \t]+[&!][^ \t]*)+$/, "").replace(/^[&!][^ \t]*$/, "");
-    const structural = /^(?:[-?:](?:[ \t]|$)|---|\.\.\.|%)/.test(text) || /:(?:[ \t]|$)/.test(text.replace(/"[^"]*"|'[^']*'/g, '""'));
+    const bare = text2.replace(/(?:[ \t]+[&!][^ \t]*)+$/, "").replace(/^[&!][^ \t]*$/, "");
+    const structural = /^(?:[-?:](?:[ \t]|$)|---|\.\.\.|%)/.test(text2) || /:(?:[ \t]|$)/.test(text2.replace(/"[^"]*"|'[^']*'/g, '""'));
     if (startFlow === 0 && prev !== void 0 && !prev.opens) {
       if (indent > prev.content || !structural) no("a plain scalar over several lines");
     }
-    const opens = flow > 0 || bare === "" || bare.endsWith(":") || /^(?:[-?](?:[ \t]+[-?])*)$/.test(bare) || text === "---" || /^---[ \t]/.test(text);
+    const opens = flow > 0 || bare === "" || bare.endsWith(":") || /^(?:[-?](?:[ \t]+[-?])*)$/.test(bare) || text2 === "---" || /^---[ \t]/.test(text2);
     prev = { content, opens };
-    const last = text.split(/[ \t]+/).at(-1) ?? "";
+    const last = text2.split(/[ \t]+/).at(-1) ?? "";
     if (flow === 0 && /^[|>][0-9+-]{0,2}$/.test(last)) {
-      const head = text.slice(0, text.length - last.length);
+      const head = text2.slice(0, text2.length - last.length);
       if (!/(?:^|[ \t])-[ \t]|:[ \t]|^\?[ \t]/.test(head)) no("a block scalar at the top level");
       const spaces = (l) => /^ */.exec(l)[0].length;
       let j = li + 1;
@@ -30214,25 +30214,25 @@ function tokenizeSql(s) {
   }
   return out.segs;
 }
-function tokenize2(text, language, path10) {
+function tokenize2(text2, language, path10) {
   switch (language) {
     case "sql":
-      return tokenizeSql(text);
+      return tokenizeSql(text2);
     case "rust":
-      return tokenizeRust(text);
+      return tokenizeRust(text2);
     case "typescript":
     case "javascript":
-      return tokenizeJs(text, mayHoldJsx(path10));
+      return tokenizeJs(text2, mayHoldJsx(path10));
     case "yaml":
-      return tokenizeYaml(text);
+      return tokenizeYaml(text2);
     case "toml":
-      return tokenizeToml(text);
+      return tokenizeToml(text2);
   }
 }
-function normalized(text, language, path10) {
+function normalized(text2, language, path10) {
   let segs;
   try {
-    segs = tokenize2(text, language, path10);
+    segs = tokenize2(text2, language, path10);
     return language === "yaml" ? byLine(segs) : byGap(segs);
   } catch (e) {
     if (e instanceof Unclassifiable) return { why: e.message };
@@ -30292,8 +30292,8 @@ function byGap(segs) {
 }
 function sameYaml(a2, b) {
   try {
-    const load2 = (text) => {
-      const docs = (0, import_yaml3.parseAllDocuments)(text);
+    const load2 = (text2) => {
+      const docs = (0, import_yaml3.parseAllDocuments)(text2);
       const list2 = Array.isArray(docs) ? docs : [docs];
       if (list2.some((d) => d.errors.length > 0)) return void 0;
       return list2.map((d) => d.toJS({ maxAliasCount: 100 }));
@@ -31735,18 +31735,18 @@ function describeIssue2(issue2) {
 var OWNER_CONFIG_HINT = "crew_toolchain_paths is not read from studio.yaml any more; move it to the owner config ($XDG_CONFIG_HOME/studio/config.yaml or ~/.config/studio/config.yaml)";
 function loadConfig(projectDir2) {
   const file4 = join3(projectDir2, ".studio", "studio.yaml");
-  let text;
+  let text2;
   try {
-    text = readFileSync3(file4, "utf8");
+    text2 = readFileSync3(file4, "utf8");
   } catch (e) {
     throw new ConfigError(file4, `cannot read file (${e.message})`);
   }
-  return parseConfig(text, file4);
+  return parseConfig(text2, file4);
 }
-function parseConfig(text, file4) {
+function parseConfig(text2, file4) {
   let raw;
   try {
-    raw = (0, import_yaml4.parse)(text);
+    raw = (0, import_yaml4.parse)(text2);
   } catch (e) {
     throw new ConfigError(file4, `invalid YAML (${e.message})`);
   }
@@ -31984,16 +31984,16 @@ var workerTokenFile = (opts = {}) => join3(ownerConfigDir(opts), "worker-token")
 var crewTokenFile = (opts = {}) => join3(ownerConfigDir(opts), "crew-token");
 function loadOwnerConfig(opts = {}) {
   const file4 = ownerConfigFile(opts);
-  let text;
+  let text2;
   try {
-    text = readFileSync3(file4, "utf8");
+    text2 = readFileSync3(file4, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return ownerConfigSchema.parse({});
     throw new ConfigError(file4, `cannot read file (${e.message})`);
   }
   let raw;
   try {
-    raw = (0, import_yaml4.parse)(text) ?? {};
+    raw = (0, import_yaml4.parse)(text2) ?? {};
   } catch (e) {
     throw new ConfigError(file4, `invalid YAML (${e.message})`);
   }
@@ -32546,8 +32546,8 @@ function processIdentity(pid) {
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 2e3
     });
-    const text = r.status === 0 ? String(r.stdout).trim() : "";
-    identity3 = text === "" ? void 0 : text;
+    const text2 = r.status === 0 ? String(r.stdout).trim() : "";
+    identity3 = text2 === "" ? void 0 : text2;
   }
   identityCache.set(pid, { at: Date.now(), identity: identity3 });
   return identity3;
@@ -32827,8 +32827,8 @@ var reportSchema = external_exports.object({
   questions: emptyList(external_exports.array(external_exports.string()))
 });
 var camel3 = (key) => key.replace(/_([a-z0-9])/g, (_, c3) => c3.toUpperCase());
-function parseReport(text, item) {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+function parseReport(text2, item) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text2);
   if (!m) throw new ReportError("report has no YAML frontmatter");
   const front = m[1].replace(/^(head_sha:[ \t]*)([0-9a-fA-F]{40})[ \t]*$/m, '$1"$2"');
   let raw;
@@ -32871,7 +32871,7 @@ function parseReport(text, item) {
     ...d.item !== void 0 && { item: d.item },
     ...d.pr != null && { pr: d.pr },
     ...d.prTitle != null && { prTitle: d.prTitle },
-    body: text.slice(m[0].length).trim(),
+    body: text2.slice(m[0].length).trim(),
     ...d.headSha != null && { headSha: d.headSha },
     ...d.testsRun != null && { testsRun: d.testsRun },
     ...d.verdict != null && { verdict: d.verdict },
@@ -33066,11 +33066,11 @@ var RULES = [
 var REASON_CODES = [...new Set(RULES.map((r) => r[1]))];
 var NOT_IN_PLAN = /^[A-Z]+-\d+ is not in the current plan: (.+)$/;
 function reasonOf(line4) {
-  const text = line4.trim();
-  const inner = NOT_IN_PLAN.exec(text)?.[1];
+  const text2 = line4.trim();
+  const inner = NOT_IN_PLAN.exec(text2)?.[1];
   if (inner !== void 0) return reasonOf(inner);
   for (const [re, code, params] of RULES) {
-    const m = re.exec(text);
+    const m = re.exec(text2);
     if (m === null) continue;
     const p = params?.(m);
     return p === void 0 ? { code } : { code, params: p };
@@ -33283,9 +33283,9 @@ var MAX_RESET_CHARS = 100;
 var LIMIT_HEAD = /^You['’]ve hit your (?:([\p{L}\p{N}.-]+(?: [\p{L}\p{N}.-]+){0,4}) )?limit$/u;
 var RESET_SEGMENT = /^resets\s+(\S.*)$/u;
 var SEGMENT = /^.+$/u;
-function matchLimitText(text) {
-  if (typeof text !== "string") return void 0;
-  const [head = "", ...segments] = text.split("\xB7");
+function matchLimitText(text2) {
+  if (typeof text2 !== "string") return void 0;
+  const [head = "", ...segments] = text2.split("\xB7");
   const m = LIMIT_HEAD.exec(head.trimEnd());
   if (!m) return void 0;
   let reset2;
@@ -33314,12 +33314,12 @@ function rejectedWindow(info) {
     ...raw ? { resetsAt: raw } : {}
   };
 }
-function structuredLimit(ev, text) {
+function structuredLimit(ev, text2) {
   const window = rejectedWindow(rateLimitInfo(ev));
   const usage = ev.api_error === "usage_limit_reached";
   if (!usage && !(ev.api_error_status === 429 && window !== void 0)) return void 0;
   if (window?.resetsAt !== void 0) return window;
-  const fromText = matchLimitText(text);
+  const fromText = matchLimitText(text2);
   return fromText ?? window ?? { kind: "session" };
 }
 var absoluteReset = (s) => s !== void 0 && (/^\d{10}$|^\d{13}$/.test(s) || ISO_TIME.test(s));
@@ -33356,8 +33356,8 @@ function detectLimit(logLine2) {
       texts.find((t) => matchLimitText(t) !== void 0)
     );
     if (structured) return structured;
-    for (const text of texts) {
-      const hit = matchLimitText(text);
+    for (const text2 of texts) {
+      const hit = matchLimitText(text2);
       if (hit) return hit;
     }
   }
@@ -33668,10 +33668,10 @@ var BLOCK_TEXTS = [
   ]
 ];
 var ORG_DISABLED_BODY = /^\{[^\n]*"message":\s*"This organization has been disabled\b/;
-function matchBlockText(text) {
-  if (typeof text !== "string" || text.length > MAX_BLOCK_TEXT) return void 0;
-  const bare = text.replace(API_ERROR_PREFIX, "");
-  if (bare !== text && ORG_DISABLED_BODY.test(bare)) return { reason: "organization_disabled" };
+function matchBlockText(text2) {
+  if (typeof text2 !== "string" || text2.length > MAX_BLOCK_TEXT) return void 0;
+  const bare = text2.replace(API_ERROR_PREFIX, "");
+  if (bare !== text2 && ORG_DISABLED_BODY.test(bare)) return { reason: "organization_disabled" };
   for (const [re, reason] of BLOCK_TEXTS) {
     if (re.test(bare)) return { reason };
   }
@@ -34033,10 +34033,10 @@ function readOrCode(o2, file4, missing) {
     throw e;
   }
 }
-function writePrivate(file4, text) {
+function writePrivate(file4, text2) {
   const tmp = `${file4}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
   try {
-    writeFileSync4(tmp, text, { flag: "wx", mode: 384 });
+    writeFileSync4(tmp, text2, { flag: "wx", mode: 384 });
     renameSync4(tmp, file4);
   } catch (e) {
     try {
@@ -34068,10 +34068,10 @@ function readAccount(o2, label) {
   checkLabel(label);
   checkDir(o2);
   const file4 = accountFile(o2, label);
-  const text = readOrCode(o2, file4, () => new Error(`no account ${label}`));
+  const text2 = readOrCode(o2, file4, () => new Error(`no account ${label}`));
   let raw;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(text2);
   } catch {
     throw new Error(`${file4} is not valid JSON`);
   }
@@ -34113,14 +34113,14 @@ function listAccounts(o2) {
 }
 function activeLabel(o2) {
   const absent = new Error("absent");
-  let text;
+  let text2;
   try {
-    text = readOrCode(o2, activeFile(o2), () => absent);
+    text2 = readOrCode(o2, activeFile(o2), () => absent);
   } catch (e) {
     if (e === absent) return void 0;
     throw e;
   }
-  const label = text.trim();
+  const label = text2.trim();
   const known = listAccountNames(o2);
   if (!validLabel(label) || label.startsWith(".") || !known.includes(label)) {
     throw new Error(`${activeFile(o2)} names no stored account; run studio account use <label>`);
@@ -34331,8 +34331,8 @@ function proposeCi(detect, repoVisibility, current, usage) {
 }
 var GITHUB_HOSTED = /^(ubuntu|windows|macos)-/i;
 var MAX_TEXT = 120;
-function clean(text) {
-  return String(text).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_TEXT);
+function clean(text2) {
+  return String(text2).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_TEXT);
 }
 function labelList(value2) {
   const items = typeof value2 === "string" ? [value2] : value2;
@@ -34358,10 +34358,10 @@ function resolveRunsOn(value2) {
   }
   return { kind: "set", labels };
 }
-function parseWorkflow(text) {
+function parseWorkflow(text2) {
   let doc;
   try {
-    doc = (0, import_yaml6.parse)(text);
+    doc = (0, import_yaml6.parse)(text2);
   } catch (err) {
     return { ok: false, error: `cannot parse: ${clean(err instanceof Error ? err.message : err)}` };
   }
@@ -34536,7 +34536,7 @@ function crewPushWarnings(files) {
 var EXPECTED_GROUP = "ci-${{ github.head_ref || github.ref_name }}";
 var WORKFLOW_DIR = [".github", "workflows"];
 var REPO_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-var safe = (text) => String(text).replace(/[\p{Cc}\p{Cf}]/gu, " ");
+var safe = (text2) => String(text2).replace(/[\p{Cc}\p{Cf}]/gu, " ");
 var snake3 = (key) => key.replace(/[A-Z]/g, (c3) => `_${c3.toLowerCase()}`);
 function snakeKeys(value2) {
   if (Array.isArray(value2)) return value2.map(snakeKeys);
@@ -34626,10 +34626,10 @@ function applyCi(doc, ci) {
     throw new Error(`the resulting studio.yaml would be invalid, nothing written (${safe(why)})`);
   }
 }
-function writeAtomic(file4, text) {
+function writeAtomic(file4, text2) {
   const tmp = `${file4}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
   try {
-    writeFileSync5(tmp, text, { flag: "wx", mode: statSync2(file4).mode & 511 });
+    writeFileSync5(tmp, text2, { flag: "wx", mode: statSync2(file4).mode & 511 });
     renameSync5(tmp, file4);
   } catch (e) {
     try {
@@ -34670,15 +34670,15 @@ async function detectCi(project, primary, ports, current, timeoutMs) {
 }
 async function runSetupCi(o2) {
   const file4 = join9(o2.project, ".studio", "studio.yaml");
-  let text;
+  let text2;
   try {
-    text = readFileSync9(file4, "utf8");
+    text2 = readFileSync9(file4, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
     );
   }
-  const doc = (0, import_yaml7.parseDocument)(text);
+  const doc = (0, import_yaml7.parseDocument)(text2);
   if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
   const primary = assertPrimaryRepo(doc.get("primary_repo"));
   const notes = [];
@@ -34759,12 +34759,12 @@ var fail = (what) => {
 };
 var validToken = (t) => /^[^\s\p{Cc}]+$/u.test(t);
 function parseProviderOutput(stdout) {
-  const text = stdout.trim();
-  if (text === "") return void 0;
-  if (text.includes("\n")) return fail("output must be exactly one JSON line");
+  const text2 = stdout.trim();
+  if (text2 === "") return void 0;
+  if (text2.includes("\n")) return fail("output must be exactly one JSON line");
   let raw;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(text2);
   } catch {
     return fail("output is not valid JSON");
   }
@@ -34830,16 +34830,16 @@ function checkProviderConfigDir(dir, owner) {
   return real;
 }
 function readSettings(file4) {
-  let text;
+  let text2;
   try {
     if (!statSync3(file4).isFile()) return { problem: `${file4} is not a regular file` };
-    text = readFileSync10(file4, "utf8");
+    text2 = readFileSync10(file4, "utf8");
   } catch (e) {
     return e.code === "ENOENT" ? {} : { problem: `${file4} cannot be read` };
   }
   let raw;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(text2);
   } catch {
     raw = void 0;
   }
@@ -35079,16 +35079,16 @@ function runningPerLabel(ownerRoot, ports) {
 }
 function relayRunningLabels(stateRoot) {
   const f3 = join10(stateRoot, "relay.json");
-  let text;
+  let text2;
   try {
     if (!lstatSync8(f3).isFile()) return [DEFAULT_LABEL];
-    text = readFileSync11(f3, "utf8");
+    text2 = readFileSync11(f3, "utf8");
   } catch (e) {
     return e.code === "ENOENT" ? [] : [DEFAULT_LABEL];
   }
   let items;
   try {
-    items = JSON.parse(text).items;
+    items = JSON.parse(text2).items;
   } catch {
     return [DEFAULT_LABEL];
   }
@@ -35856,14 +35856,14 @@ var timeoutsFileOf = (agentsFile) => agentsFile.replace(/\.agents\.json$/, ".tim
 var agentsFileOf = (stateRoot, id) => join12(stateRoot, "guard", `${id}.agents.json`);
 function timedOutAgents(stateRoot, id) {
   const file4 = timeoutsFileOf(agentsFileOf(stateRoot, id));
-  let text;
+  let text2;
   try {
     if (!lstatSync10(file4).isFile()) return 1;
-    text = readFileSync13(file4, "utf8");
+    text2 = readFileSync13(file4, "utf8");
   } catch (e) {
     return e.code === "ENOENT" ? 0 : 1;
   }
-  const lines2 = text.split("\n").filter((l) => l !== "");
+  const lines2 = text2.split("\n").filter((l) => l !== "");
   const ids = new Set(lines2.filter((l) => AGENT_ID_RE.test(l)));
   return ids.size + (lines2.some((l) => !AGENT_ID_RE.test(l)) ? 1 : 0);
 }
@@ -36546,7 +36546,7 @@ function loadSources(dir = capabilitiesDir()) {
 var LICENSE_NAME = /^(?:(?:un)?licen[cs]e|copying|notice)(?:[-_.][a-z0-9._-]*)?$/i;
 var SCRIPT_NAME = /\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|ps1)$/i;
 var isLicenseName = (name) => LICENSE_NAME.test(name) && !SCRIPT_NAME.test(name);
-var clean2 = (text) => text.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 300);
+var clean2 = (text2) => text2.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 300);
 function hashOf(dir, rel) {
   try {
     let at2 = dir;
@@ -37118,9 +37118,9 @@ function writeCaps(o2) {
   removeStateEntry(stateRoot, capsFile(stateRoot, id));
   removeStateEntry(stateRoot, skillsFile(stateRoot, id));
   const skipped = [];
-  const copy = (rel, text) => {
+  const copy = (rel, text2) => {
     const file4 = join16(capsDir, ...rel.split("/"));
-    writeStateFile(stateRoot, file4, text);
+    writeStateFile(stateRoot, file4, text2);
     return file4;
   };
   const sourceList = loadSources(shipped2).sources;
@@ -37448,10 +37448,10 @@ function estimate(model, u2) {
   const [inp, out, read3, write] = PRICES.find(([re]) => re.test(model))?.[1] ?? HIGHEST;
   return (amount(u2.input_tokens) * inp + amount(u2.output_tokens) * out + amount(u2.cache_read_input_tokens) * read3 + amount(u2.cache_creation_input_tokens) * write) / 1e6;
 }
-function usageFromLog(text) {
+function usageFromLog(text2) {
   const segments = [];
   let cur = { init: false, results: [], assistants: /* @__PURE__ */ new Map() };
-  for (const line4 of text.split("\n")) {
+  for (const line4 of text2.split("\n")) {
     if (!line4.includes('"result"') && !line4.includes('"init"') && !line4.includes('"usage"')) {
       continue;
     }
@@ -38019,17 +38019,17 @@ async function blobText(dir, oid, ports) {
     const size = Number(
       (await ports.git.run(dir, ["--no-replace-objects", "cat-file", "-s", oid])).trim()
     );
-    let text2 = await ports.git.run(dir, ["--no-replace-objects", "cat-file", "blob", oid]);
-    const missing = size - Buffer.byteLength(text2);
-    if (missing === 1) text2 += "\n";
-    else if (missing === 2) text2 += "\r\n";
+    let text3 = await ports.git.run(dir, ["--no-replace-objects", "cat-file", "blob", oid]);
+    const missing = size - Buffer.byteLength(text3);
+    if (missing === 1) text3 += "\n";
+    else if (missing === 2) text3 += "\r\n";
     else if (missing !== 0) return { why: "could not be read exactly" };
-    bytes = Buffer.from(text2);
+    bytes = Buffer.from(text3);
   }
   if (bytes.includes(0)) return { why: "binary" };
-  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  if (text.includes("\uFFFD")) return { why: "not UTF-8 text" };
-  return { text };
+  const text2 = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  if (text2.includes("\uFFFD")) return { why: "not UTF-8 text" };
+  return { text: text2 };
 }
 async function readReference(m, stateRoot, ports) {
   const sha = await fetchMainCommit(m.main, ports);
@@ -38194,15 +38194,15 @@ function contractScope(m) {
 function readContracts(stateRoot) {
   const file4 = join19(stateRoot, CONTRACTS_FILE);
   assertStatePath(stateRoot, file4);
-  let text;
+  let text2;
   try {
     if (!lstatSync16(file4).isFile()) throw new GroupError(`${CONTRACTS_FILE} is not a plain file`);
-    text = readFileSync20(file4, "utf8");
+    text2 = readFileSync20(file4, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return void 0;
     throw e;
   }
-  const r = JSON.parse(text);
+  const r = JSON.parse(text2);
   if (typeof r?.digest !== "string" || typeof r.files !== "object" || r.files === null) {
     throw new GroupError(`${CONTRACTS_FILE} is unreadable`);
   }
@@ -38308,7 +38308,7 @@ async function checkContracts(o2) {
 }
 var ITEM_RE = /^[A-Z]+-\d+$/;
 var CODE_RE = /^[a-z_]{1,32}$/;
-function groupRowFromState(p, m, text, stateDir) {
+function groupRowFromState(p, m, text2, stateDir) {
   const row = {
     id: p.id,
     repo: p.repo,
@@ -38316,10 +38316,10 @@ function groupRowFromState(p, m, text, stateDir) {
     self: p.id === m.self,
     ...stateDir === void 0 ? {} : { stateDir }
   };
-  if (text === void 0) return { ...row, problem: "no state yet" };
+  if (text2 === void 0) return { ...row, problem: "no state yet" };
   let s;
   try {
-    s = JSON.parse(text);
+    s = JSON.parse(text2);
     if (s === null || typeof s !== "object" || Array.isArray(s)) throw new Error("not an object");
   } catch {
     return { ...row, problem: "state unreadable" };
@@ -38385,8 +38385,8 @@ function groupRows(group, self, owner, selfState) {
         problem: "no state root"
       };
     }
-    const text = p.id === self && selfState !== void 0 ? selfState : readStateText(root);
-    return groupRowFromState(p, { main: group.main, self: self ?? "" }, text, stateDirName(real));
+    const text2 = p.id === self && selfState !== void 0 ? selfState : readStateText(root);
+    return groupRowFromState(p, { main: group.main, self: self ?? "" }, text2, stateDirName(real));
   });
 }
 function formatGroupRows(group, rows2) {
@@ -38999,13 +38999,13 @@ function addResearchRoot(owner, dir, ownerRoot) {
     throw new Error(`analysis folder ${abs}: must not be the home directory or a parent of it`);
   }
   const file4 = ownerConfigFile(owner);
-  let text = "";
+  let text2 = "";
   try {
-    text = readFileSync23(file4, "utf8");
+    text2 = readFileSync23(file4, "utf8");
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
-  const doc = (0, import_yaml10.parseDocument)(text === "" ? "{}" : text);
+  const doc = (0, import_yaml10.parseDocument)(text2 === "" ? "{}" : text2);
   if (doc.errors.length > 0) throw new Error(`${file4}: invalid YAML; nothing changed`);
   if (!(0, import_yaml10.isMap)(doc.contents)) throw new Error(`${file4}: not a map; nothing changed`);
   const current = doc.get("research_roots");
@@ -39209,8 +39209,8 @@ var MAX_LESSON_CHARS = 300;
 var MAX_PENDING = 200;
 var MAX_PER_REPORT = 10;
 var HEADING = "## Lessons";
-function sanitizeLesson(text) {
-  const flat = text.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim();
+function sanitizeLesson(text2) {
+  const flat = text2.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim();
   const plain2 = flat.replace(/^(?:[#>*+-]+\s*)+/, "").trim();
   return plain2 === "" ? void 0 : plain2.slice(0, MAX_LESSON_CHARS);
 }
@@ -39260,16 +39260,16 @@ var LESSONS_LOCK_STALE_MS = 3e4;
 function readFile(stateRoot) {
   const file4 = lessonsFile(stateRoot);
   assertStatePath(stateRoot, file4);
-  let text;
+  let text2;
   try {
-    text = readFileSync24(file4, "utf8");
+    text2 = readFileSync24(file4, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return { next: 1, lessons: [] };
     throw new Error("lessons.json cannot be read");
   }
   let raw;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(text2);
   } catch {
     throw new Error("lessons.json is not valid JSON");
   }
@@ -39310,14 +39310,14 @@ function proposeLessons(stateRoot, role, item, lessons, now, evidence) {
     let added = 0;
     for (const raw of lessons.slice(0, 50)) {
       if (added >= MAX_PER_REPORT || data.lessons.length >= MAX_PENDING) break;
-      const text = sanitizeLesson(raw);
-      if (text === void 0) continue;
-      if (data.lessons.some((l) => l.role === role && same(l.text, text))) continue;
+      const text2 = sanitizeLesson(raw);
+      if (text2 === void 0) continue;
+      if (data.lessons.some((l) => l.role === role && same(l.text, text2))) continue;
       data.lessons.push({
         n: data.next++,
         role,
         item,
-        text,
+        text: text2,
         at: now.toISOString(),
         ...ev === void 0 ? {} : { evidence: ev }
       });
@@ -39349,8 +39349,8 @@ function describeLessons(stateRoot, now) {
     text: l.text
   }));
 }
-function normalizeLesson(text) {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+function normalizeLesson(text2) {
+  return text2.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 function mergeDuplicateLessons(stateRoot, now) {
   return updateFile(stateRoot, (data) => {
@@ -39430,21 +39430,21 @@ function readRole(projectDir2, role) {
     throw e;
   }
 }
-function writeRole(projectDir2, role, text) {
+function writeRole(projectDir2, role, text2) {
   const file4 = roleFile(projectDir2, role);
   mkdirSync6(dirname8(file4), { recursive: true });
   roleFile(projectDir2, role);
   const tmp = `${file4}.${process.pid}.${randomBytes8(4).toString("hex")}.tmp`;
   try {
-    writeFileSync9(tmp, text, { flag: "wx" });
+    writeFileSync9(tmp, text2, { flag: "wx" });
     renameSync13(tmp, file4);
   } catch (e) {
     rmSync7(tmp, { force: true });
     throw e;
   }
 }
-function split(text) {
-  const lines2 = text.split("\n");
+function split(text2) {
+  const lines2 = text2.split("\n");
   const start2 = lines2.findIndex((l) => l.trim() === HEADING);
   if (start2 === -1) return { before: lines2, lessons: [], after: [], found: false };
   let end = lines2.findIndex((l, i2) => i2 > start2 && /^##? /.test(l));
@@ -39472,22 +39472,22 @@ function acceptLesson(projectDir2, stateRoot, n4, now = /* @__PURE__ */ new Date
   return updateFile(stateRoot, (data) => {
     const proposal = data.lessons.find((l) => l.n === n4);
     if (!proposal) throw new Error(`no proposed lesson ${n4}`);
-    const text = sanitizeLesson(proposal.text);
-    if (text === void 0) throw new Error(`proposed lesson ${n4} is empty`);
+    const text2 = sanitizeLesson(proposal.text);
+    if (text2 === void 0) throw new Error(`proposed lesson ${n4} is empty`);
     const parts = split(readRole(projectDir2, proposal.role));
-    const known = parts.lessons.some((l) => same(l.replace(/^- /, ""), text));
+    const known = parts.lessons.some((l) => same(l.replace(/^- /, ""), text2));
     if (!known) {
       if (parts.lessons.length >= MAX_LESSON_LINES) {
         throw new Error(
           `the Lessons of ${proposal.role} are full (${MAX_LESSON_LINES} lines): prune one first`
         );
       }
-      parts.lessons.push(`- ${text}`);
+      parts.lessons.push(`- ${text2}`);
       writeRole(projectDir2, proposal.role, join_(parts));
     }
     judge(data, { n: n4, role: proposal.role, verdict: "accepted", at: now.toISOString() });
     writeFile_(stateRoot, { ...data, lessons: data.lessons.filter((l) => l.n !== n4) });
-    return { role: proposal.role, text, lines: parts.lessons.length };
+    return { role: proposal.role, text: text2, lines: parts.lessons.length };
   });
 }
 function pruneLesson(projectDir2, role, line4) {
@@ -39516,9 +39516,9 @@ var MAX_FILE_BYTES = 64 * 1024;
 var MAX_FILES = 1e3;
 var MIN_WORD = 3;
 var SAFE_NAME2 = /^[A-Za-z0-9._-]+\.md$/;
-var wordsOf = (text) => [
+var wordsOf = (text2) => [
   ...new Set(
-    text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= MIN_WORD)
+    text2.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= MIN_WORD)
   )
 ];
 var isReal = (path10, test) => {
@@ -39537,16 +39537,16 @@ function searchSolutions(projectDir2, query, limit = 5) {
   const hits = [];
   for (const name of readdirSync9(dir).sort().slice(0, MAX_FILES)) {
     if (!SAFE_NAME2.test(name) || !isReal(join25(dir, name), "file")) continue;
-    let text;
+    let text2;
     try {
-      text = readFileSync25(join25(dir, name), "utf8");
+      text2 = readFileSync25(join25(dir, name), "utf8");
     } catch {
       continue;
     }
-    const lower = text.toLowerCase();
+    const lower = text2.toLowerCase();
     const score = words2.filter((w) => lower.includes(w)).length;
     if (score === 0) continue;
-    const heading = text.split("\n").find((l) => l.startsWith("# "));
+    const heading = text2.split("\n").find((l) => l.startsWith("# "));
     const title = sanitizeLesson(heading?.slice(2) ?? "") ?? name.slice(0, -".md".length);
     hits.push({ path: `.studio/solutions/${name}`, title, score });
   }
@@ -39992,10 +39992,10 @@ function brokerCrewAccounts(o2) {
     }
     const until = started + (o2.waitMs ?? (op === "sweep" ? 6e4 : 3e5));
     for (; ; ) {
-      const text = o2.readFile(o2.results[op])?.replace(/^﻿/, "");
+      const text2 = o2.readFile(o2.results[op])?.replace(/^﻿/, "");
       let raw;
       try {
-        raw = text === void 0 ? void 0 : JSON.parse(text);
+        raw = text2 === void 0 ? void 0 : JSON.parse(text2);
       } catch {
         raw = void 0;
       }
@@ -40566,6 +40566,330 @@ async function startEgressProxy(o2) {
   };
 }
 
+// src/relay-lockdown.ts
+import { lookup as dnsLookup } from "node:dns/promises";
+async function lockdownFor(o2) {
+  const lookup2 = o2.lookup ?? (async (name) => {
+    try {
+      return (await dnsLookup(name, { all: true })).map((a2) => a2.address);
+    } catch {
+      return [];
+    }
+  });
+  const resolved = {};
+  for (const h2 of o2.deny.hosts) {
+    if (h2 === "local-subnets" || h2 === "tailnet-peers" || h2.includes("/")) continue;
+    if (addressSpan(h2) !== void 0) continue;
+    resolved[h2] = await lookup2(h2);
+  }
+  return lockdownPlan({
+    resolvers: await o2.resolvers(),
+    denyHosts: o2.deny.hosts,
+    resolved,
+    denyPorts: o2.deny.ports
+  });
+}
+var LOCKDOWN_GROUP = "Studio relay lockdown";
+var LOCKDOWN_RULE = "Studio relay lockdown: no local network";
+var LOCAL_V4 = [
+  [10, 0, 0, 0, 8],
+  [100, 64, 0, 0, 10],
+  [169, 254, 0, 0, 16],
+  [172, 16, 0, 0, 12],
+  [192, 168, 0, 0, 16]
+];
+var LOCAL_V6 = [
+  ["fc00::", 7],
+  ["fe80::", 10]
+];
+var v4Big = (s) => {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (m === null) return void 0;
+  const p = m.slice(1).map(Number);
+  if (p.some((x) => x > 255)) return void 0;
+  return p.reduce((a2, x) => (a2 << 8n) + BigInt(x), 0n);
+};
+var v6Big = (s) => {
+  if (!s.includes(":")) return void 0;
+  const h2 = hextets(s);
+  return h2 === void 0 ? void 0 : h2.reduce((a2, x) => (a2 << 16n) + BigInt(x), 0n);
+};
+var span = (v6, base2, bits) => {
+  const width = v6 ? 128 : 32;
+  const size = 1n << BigInt(width - bits);
+  const lo = base2 / size * size;
+  return { v6, lo, hi: lo + size - 1n };
+};
+var text = (v6, n4) => {
+  if (!v6) {
+    const b = [24n, 16n, 8n, 0n].map((s) => Number(n4 >> s & 255n));
+    return ipv43(b[0], b[1], b[2], b[3]);
+  }
+  return Array.from(
+    { length: 8 },
+    (_, i2) => (n4 >> BigInt(112 - 16 * i2) & 0xffffn).toString(16)
+  ).join(":");
+};
+var spanText = (s) => s.lo === s.hi ? text(s.v6, s.lo) : `${text(s.v6, s.lo)}-${text(s.v6, s.hi)}`;
+var localSpans = () => [
+  ...LOCAL_V4.map(([a2, b, c3, d, bits]) => span(false, v4Big(ipv43(a2, b, c3, d)), bits)),
+  ...LOCAL_V6.map(([a2, bits]) => span(true, v6Big(a2), bits))
+];
+function addressSpan(a2) {
+  const bare = a2.replace(/%.*$/, "");
+  const n4 = v4Big(bare);
+  if (n4 !== void 0) return { v6: false, lo: n4, hi: n4 };
+  const n6 = v6Big(bare);
+  return n6 === void 0 ? void 0 : { v6: true, lo: n6, hi: n6 };
+}
+function carve(spans, holes) {
+  let out = [...spans];
+  for (const h2 of holes) {
+    out = out.flatMap((s) => {
+      if (s.v6 !== h2.v6 || h2.lo > s.hi || h2.hi < s.lo) return [s];
+      const parts = [];
+      if (h2.lo > s.lo) parts.push({ v6: s.v6, lo: s.lo, hi: h2.lo - 1n });
+      if (h2.hi < s.hi) parts.push({ v6: s.v6, lo: h2.hi + 1n, hi: s.hi });
+      return parts;
+    });
+  }
+  return out;
+}
+function lockdownPlan(o2) {
+  const notes = [];
+  const locals = localSpans();
+  const inLocal = (s) => locals.some((l) => l.v6 === s.v6 && s.lo >= l.lo && s.hi <= l.hi);
+  const holes = [];
+  for (const r of o2.resolvers) {
+    const s = addressSpan(r);
+    if (s !== void 0 && inLocal(s) && !holes.some((h2) => h2.v6 === s.v6 && h2.lo === s.lo)) {
+      holes.push(s);
+    }
+  }
+  holes.sort((a2, b) => a2.v6 === b.v6 ? a2.lo < b.lo ? -1 : 1 : a2.v6 ? 1 : -1);
+  const hosts = [];
+  const add = (s) => {
+    if (s === void 0) return;
+    const t = spanText(s);
+    if (!hosts.includes(t)) hosts.push(t);
+  };
+  for (const h2 of o2.denyHosts) {
+    if (h2 === "local-subnets" || h2 === "tailnet-peers") continue;
+    const cidr = /^([^/]+)\/(\d{1,3})$/.exec(h2);
+    if (cidr !== null) {
+      const base2 = v4Big(cidr[1]);
+      if (base2 !== void 0) add(span(false, base2, Number(cidr[2])));
+      continue;
+    }
+    const a2 = addressSpan(h2);
+    if (a2 !== void 0) {
+      add(a2);
+      continue;
+    }
+    const got = o2.resolved?.[h2] ?? [];
+    if (got.length === 0) {
+      notes.push(`deny.hosts ${h2}: does not resolve now, so no firewall rule holds it`);
+      continue;
+    }
+    for (const x of got) add(addressSpan(x));
+    notes.push(`deny.hosts ${h2}: blocked at ${got.join(", ")} as it resolves now`);
+  }
+  return {
+    local: carve(locals, holes).map(spanText),
+    resolvers: holes.map(spanText),
+    hosts,
+    ports: [...new Set(o2.denyPorts)].sort((a2, b) => a2 - b),
+    notes
+  };
+}
+var PROBE_FIXED = LOCAL_V4.map(
+  ([a2, b, c3, d]) => `${ipv43(a2, b, c3, d + 1)}:445`
+);
+var CONNECT_TEST = String.raw`$res = @{}
+$open = @{}
+function Code($x) {
+  $e = $x
+  while ($null -ne $e.InnerException) { $e = $e.InnerException }
+  if ($e -is [Net.Sockets.SocketException]) { [string]$e.ErrorCode } else { 'error' }
+}
+foreach ($t in $targets) {
+  $at = $t.LastIndexOf(':')
+  $c = New-Object Net.Sockets.TcpClient
+  try { $open[$t] = @($c, $c.ConnectAsync($t.Substring(0, $at).Trim('[', ']'), [int]$t.Substring($at + 1))) }
+  catch { $res[$t] = Code $_.Exception; $c.Dispose() }
+}
+$deadline = [DateTime]::UtcNow.AddMilliseconds(3000)
+foreach ($t in @($open.Keys)) {
+  $c = $open[$t][0]
+  $left = [int][Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+  try { if ($open[$t][1].Wait($left)) { $res[$t] = 'open' } else { $res[$t] = 'timeout' } }
+  catch { $res[$t] = Code $_.Exception }
+  finally { $c.Dispose() }
+}
+[Console]::Out.Write((ConvertTo-Json -Compress $res))
+`;
+var FIREWALL_REFUSED = "10013";
+function unrefused(results) {
+  return Object.entries(results).filter(([, r]) => r !== FIREWALL_REFUSED).map(
+    ([t, r]) => `${t} ${r === "open" ? "opened" : r === "timeout" ? "timed out" : `error ${r}`}`
+  );
+}
+function lockdownFunctions(plan) {
+  const list2 = (xs) => `@(${xs.map((x) => typeof x === "number" ? String(x) : psQuote(x)).join(", ")})`;
+  return `$lockGroup = ${psQuote(LOCKDOWN_GROUP)}
+$lockLocal = ${list2(plan.local)}
+$lockResolvers = ${list2(plan.resolvers)}
+$lockHosts = ${list2(plan.hosts)}
+$lockPorts = ${list2(plan.ports)}
+function LockdownRules([string[]]$sids) {
+  Get-NetFirewallRule -Group $lockGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  $who = 'D:' + (($sids | ForEach-Object { "(A;;CC;;;$_)" }) -join '')
+  $base = @{ Group = $lockGroup; Direction = 'Outbound'; Action = 'Block'; LocalUser = $who; Profile = 'Any' }
+  New-NetFirewallRule @base -DisplayName ${psQuote(LOCKDOWN_RULE)} -RemoteAddress ($lockLocal + $lockHosts) | Out-Null
+  foreach ($p in @('TCP', 'UDP')) {
+    if ($lockResolvers.Count -gt 0) { New-NetFirewallRule @base -DisplayName "Studio relay lockdown: DNS resolvers, $p but port 53" -Protocol $p -RemotePort @('1-52', '54-65535') -RemoteAddress $lockResolvers | Out-Null }
+    if ($lockPorts.Count -gt 0) { New-NetFirewallRule @base -DisplayName "Studio relay lockdown: denied ports, $p" -Protocol $p -RemotePort ([string[]]$lockPorts) | Out-Null }
+  }
+}
+# The rules as Windows applies them: present, on, blocking, bound to every SID; every firewall
+# profile on and taking local rules. Returns the problems.
+function LockdownCheck([string[]]$sids) {
+  $problems = @()
+  foreach ($p in @(Get-NetFirewallProfile -PolicyStore ActiveStore)) {
+    if ([string]$p.Enabled -ne 'True') { $problems += "Windows Firewall is off for the $($p.Name) profile (turn it on: Set-NetFirewallProfile -Profile $($p.Name) -Enabled True)" }
+    if ([string]$p.AllowLocalFirewallRules -eq 'False') { $problems += "a policy makes the $($p.Name) profile ignore local firewall rules" }
+  }
+  $r = @(Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName ${psQuote(LOCKDOWN_RULE)} -ErrorAction SilentlyContinue)
+  if ($r.Count -ne 1) { $problems += 'the lockdown rule is not in the active firewall policy' }
+  else {
+    if ([string]$r[0].Enabled -ne 'True' -or [string]$r[0].Action -ne 'Block' -or [string]$r[0].Direction -ne 'Outbound') { $problems += 'the lockdown rule is not an enabled outbound block' }
+    $who = [string]($r[0] | Get-NetFirewallSecurityFilter).LocalUser
+    foreach ($s in $sids) { if ($who -notlike "*$s*") { $problems += "the lockdown rule does not hold $s" } }
+  }
+  ,$problems
+}
+# Runs the connect test as a user with this password; the answer as a hashtable.
+function ConnectAs([string]$name, [string]$plain, [string[]]$targets) {
+  $script = '$targets = @(' + (($targets | ForEach-Object { "'" + $_ + "'" }) -join ', ') + ")\`n" + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(CONNECT_TEST, "utf8").toString("base64")}'))
+  $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+  $secure = ConvertTo-SecureString $plain -AsPlainText -Force
+  $c = New-Object System.Management.Automation.PSCredential ("$env:COMPUTERNAME\\$name", $secure)
+  $out = Join-Path $env:TEMP ('studio-probe-' + [Guid]::NewGuid().ToString('N') + '.json')
+  $err = [IO.Path]::ChangeExtension($out, '.err')
+  try {
+    $ps = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-EncodedCommand', $enc) -Credential $c -WorkingDirectory $env:SystemRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'the probe as the throwaway user did not finish' }
+    $raw = Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue
+    if (-not $raw) { throw "the probe as the throwaway user gave no answer: $(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)" }
+    $h = @{}
+    foreach ($q in (ConvertFrom-Json $raw).PSObject.Properties) { $h[$q.Name] = [string]$q.Value }
+    $h
+  } finally { Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue }
+}
+# Local targets for the probe: the fixed ones, the default gateways, the resolvers (port 80: 53
+# stays open) and a few neighbors, IPv4 only.
+function ProbeTargets {
+  $t = @(${PROBE_FIXED.map(psQuote).join(", ")})
+  $local = '^(10\\.|100\\.(6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.|169\\.254\\.|172\\.(1[6-9]|2\\d|3[01])\\.|192\\.168\\.)'
+  $gw = @(Get-NetRoute -DestinationPrefix '${ipv43(0, 0, 0, 0)}/0' -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.NextHop } | Where-Object { $_ -match $local })
+  $dns = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses } | Where-Object { $_ -match $local })
+  $nb = @(Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { [string]$_.IPAddress -match $local -and @('Unreachable', 'Incomplete') -notcontains [string]$_.State } | Select-Object -First 3 | ForEach-Object { [string]$_.IPAddress })
+  $t += @($gw | ForEach-Object { "$($_):445" }) + @($dns | ForEach-Object { "$($_):80" }) + @($nb | ForEach-Object { "$($_):445" })
+  @($t | Select-Object -Unique | Select-Object -First 12)
+}
+# A throwaway user, made like a crew user but in no group of Studio's, bound into the rules for one
+# probe: every local target must be refused by the firewall. Before and after are printed.
+function LockdownProbe([string[]]$sids) {
+  $b = New-Object byte[] 3
+  [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+  $name = $prefix + '-' + (($b | ForEach-Object { $_.ToString('x2') }) -join '')
+  $plain = NewSecret
+  $u = New-LocalUser -Name $name -Password (ConvertTo-SecureString $plain -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires -UserMayNotChangePassword -Description $crewDescription
+  try {
+    Add-LocalGroupMember -Group (Get-LocalGroup -SID 'S-1-5-32-545') -Member $u
+    $targets = ProbeTargets
+    $before = ConnectAs $name $plain $targets
+    LockdownRules (@($sids) + @($u.SID.Value))
+    $after = ConnectAs $name $plain $targets
+  } finally {
+    LockdownRules $sids
+    $plain = $null
+    $null = RetireJobUsers
+    if (Get-LocalUser -SID $u.SID -ErrorAction SilentlyContinue) { Remove-LocalUser -SID $u.SID }
+  }
+  $open = @($before.Keys | Where-Object { $before[$_] -ne '${FIREWALL_REFUSED}' }).Count
+  Write-Output "lockdown probe: before the rule $open of $($targets.Count) local targets were not refused by the firewall; after it:"
+  $bad = @($after.Keys | Where-Object { $after[$_] -ne '${FIREWALL_REFUSED}' } | ForEach-Object { "$_ $($after[$_])" })
+  if ($after.Count -ne $targets.Count -or $bad.Count -gt 0) { throw "the network lockdown does not hold: the firewall did not refuse $($bad -join ', '); nothing was opened to the lead. Check that no other firewall product replaces Windows Firewall, then run this again" }
+  Write-Output "ok: all $($targets.Count) refused by the firewall"
+}
+`;
+}
+async function dnsResolvers(run2) {
+  const r = await run2("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "ConvertTo-Json -Compress -InputObject @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses } | Select-Object -Unique)"
+  ]);
+  if (r.code !== 0) return [];
+  try {
+    const raw = JSON.parse(r.stdout.trim() || "[]");
+    const list2 = Array.isArray(raw) ? raw : [raw];
+    return list2.filter(
+      (x) => typeof x === "string" && /^[0-9A-Fa-f:.%]{2,64}$/.test(x)
+    );
+  } catch {
+    return [];
+  }
+}
+async function lockdownProblem(run2) {
+  const targets = PROBE_FIXED.map(psQuote).join(", ");
+  const r = await run2(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", `$targets = @(${targets})
+${CONNECT_TEST}`],
+    { env: powershellEnv(process.env), timeoutMs: 6e4 }
+  );
+  let results;
+  try {
+    const raw = r.code === 0 ? JSON.parse(r.stdout.trim()) : void 0;
+    results = raw !== null && typeof raw === "object" ? raw : void 0;
+  } catch {
+    results = void 0;
+  }
+  if (results === void 0 || Object.keys(results).length !== PROBE_FIXED.length) {
+    return "the network lockdown cannot be checked as the relay account; run studio relay install again, elevated";
+  }
+  const bad = unrefused(results);
+  return bad.length === 0 ? void 0 : `the network lockdown does not hold for the relay account (${bad.join(", ")}): run studio relay install again, elevated`;
+}
+var POINT_AND_PRINT_KEY = "HKLM:\\Software\\Policies\\Microsoft\\Windows NT\\Printers\\PointAndPrint";
+var POINT_AND_PRINT = `# Printer drivers: administrators only install them (Point and Print); the spooler stays on.
+if (-not (Test-Path -LiteralPath '${POINT_AND_PRINT_KEY}')) { New-Item -Path '${POINT_AND_PRINT_KEY}' -Force | Out-Null }
+Set-ItemProperty -LiteralPath '${POINT_AND_PRINT_KEY}' -Name RestrictDriverInstallationToAdministrators -Type DWord -Value 1
+Write-Output 'ok: printer drivers only by administrators (RestrictDriverInstallationToAdministrators=1)'
+`;
+function lockdownSection(plan, sids) {
+  if (plan === null) {
+    return `# --no-firewall: no lockdown, and none of an earlier run stays.
+Get-NetFirewallRule -Group ${psQuote(LOCKDOWN_GROUP)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+Write-Output 'UNSAFE (--no-firewall): no network lockdown; the relay account, which runs the proxy of the crews, can reach every machine of the local network and the tailnet directly'
+`;
+  }
+  return `# The network lockdown: no local network for the crews and the account that runs their proxy.
+Write-Output 'Network lockdown: putting the rules in place and proving them with a throwaway user (this takes a moment).'
+${lockdownFunctions(plan)}${plan.notes.map((n4) => `Write-Output ${psQuote(n4)}
+`).join("")}$lockSids = ${sids}
+LockdownRules $lockSids
+LockdownProbe $lockSids
+$lockProblems = LockdownCheck $lockSids
+if (@($lockProblems).Count -gt 0) { throw "the network lockdown does not hold: $(@($lockProblems) -join '; ')" }
+Write-Output 'ok: network lockdown (local ranges blocked, DNS resolvers on port 53 only, the internet open)'
+`;
+}
+
 // src/relay-windows.ts
 import { posix as posix2, win32 } from "node:path";
 var join28 = (...parts) => parts[0]?.startsWith("/") === true ? posix2.join(...parts) : win32.join(...parts);
@@ -40711,11 +41035,11 @@ async function machineCredProblem(run2, file4) {
   return typeof n4 === "number" && n4 > 0 ? void 0 : `the crew user's credential (${file4}) cannot be opened under this logon; run the script of studio relay setup again, elevated`;
 }
 function adminFileSnippet(o2) {
-  const text = `(@(${o2.lines.map(psQuote).join(", ")}) | ForEach-Object { $_ + [char]13 + [char]10 }) -join ''`;
+  const text2 = `(@(${o2.lines.map(psQuote).join(", ")}) | ForEach-Object { $_ + [char]13 + [char]10 }) -join ''`;
   const relay = o2.readers === "relay" ? ` "*$($relaySid):R"` : "";
   return `$target = ${psQuote(o2.file)}
 $tmp = Join-Path (Split-Path -Parent $target) ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
-[IO.File]::WriteAllText($tmp, ${text}, (New-Object Text.ASCIIEncoding))
+[IO.File]::WriteAllText($tmp, ${text2}, (New-Object Text.ASCIIEncoding))
 icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
 if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $target" }
 icacls $tmp /setowner '*S-1-5-32-544' /L /Q | Out-Null
@@ -40871,7 +41195,7 @@ icacls ${psQuote(machineStudio(o2.machine))} /reset /T /C /L /Q | Out-Null
 StrictFolder (Join-Path $machine 'broker\\tmp') @()
 # What the group carries, and the crew users of earlier versions or a crash go: with the tree
 # deleter compiled from the admin-only copy just made.
-${crewGroupFinish()}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
+${crewGroupFinish()}${lockdownSection(o2.lockdown === void 0 ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o2.lockdown, "@($relaySid, $groupSid)")}${POINT_AND_PRINT}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
 # the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
 # point among them or just below the home.
 StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
@@ -40912,7 +41236,7 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Set-Service -Name WebClient -StartupType Disabled
 }
 # What this machine had before, and what the install did: studio relay uninstall reads it.
-${recordSnippet({ machine: o2.machine, spoolerDisabled: o2.install?.disableSpooler === true })}# The pinned plugins in the crew Claude config dir of the relay home.
+${recordSnippet({ machine: o2.machine, spoolerDisabled: o2.install?.disableSpooler === true, firewall: o2.lockdown !== null })}# The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
 ${o2.install === void 0 ? setupTail(block) : installTail(block, o2.install)}`;
 }
@@ -40963,20 +41287,22 @@ $priorRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction Sile
 $priorSshdRule = if ($null -eq $priorRule) { @{ exists = $false } } else { @{ exists = $true; enabled = [string]$priorRule.Enabled } }
 $priorSshdCapability = $null
 $priorMachine = Test-Path -LiteralPath ${psQuote(machine)}
+$pnpValue = (Get-ItemProperty -LiteralPath '${POINT_AND_PRINT_KEY}' -Name RestrictDriverInstallationToAdministrators -ErrorAction SilentlyContinue).RestrictDriverInstallationToAdministrators
+$priorPnp = if ($null -eq $pnpValue) { @{ exists = $false } } else { @{ exists = $true; value = [int]$pnpValue } }
 `;
 var recordSnippet = (o2) => `$recordFile = ${psQuote(installRecordFile(o2.machine))}
 $old = $null
 if (Test-Path -LiteralPath $recordFile) { try { $old = Get-Content -Raw -LiteralPath $recordFile | ConvertFrom-Json } catch { $old = $null } }
 if ($null -ne $old) { $prior = $old.prior }
 elseif ($priorMachine) { $prior = $null }
-else { $prior = @{ webClient = $priorWebClient; spooler = $priorSpooler; sshd = $priorSshd; sshdRule = $priorSshdRule; sshdCapability = $priorSshdCapability } }
-$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o2.spoolerDisabled ? "$true" : "$false"} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); prior = $prior }
+else { $prior = @{ webClient = $priorWebClient; spooler = $priorSpooler; sshd = $priorSshd; sshdRule = $priorSshdRule; sshdCapability = $priorSshdCapability; pointAndPrint = $priorPnp } }
+$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o2.spoolerDisabled ? "$true" : "$false"} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); firewall = ${o2.firewall ? "$true" : "$false"}; prior = $prior }
 $tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
 [IO.File]::WriteAllText($tmp, (ConvertTo-Json -Compress -Depth 6 $record), (New-Object Text.ASCIIEncoding))
-icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
 if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $recordFile" }
 if (Test-Path -LiteralPath $recordFile) { [IO.File]::Replace($tmp, $recordFile, [NullString]::Value) } else { [IO.File]::Move($tmp, $recordFile) }
-icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
 `;
 var installHead = (i2, relayUser, crewPrefix2) => `#Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
@@ -41152,7 +41478,7 @@ SafeFolder $crewDir (Split-Path -Parent $crewDir)
 StrictFolder $crewDir @()
 StrictFolder (Join-Path $crewDir 'tmp') @()
 Copy-Item -LiteralPath ${psQuote(TREE_SOURCE())} -Destination (Join-Path $crewDir 'studio-tree.cs') -Force
-${crewGroupFinish()}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
+${crewGroupFinish()}${lockdownSection(o2.lockdown === void 0 ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o2.lockdown, "@($groupSid)")}${POINT_AND_PRINT}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
 `;
 }
 var OWNER_RIGHTS = "*S-1-3-4";
@@ -43449,11 +43775,11 @@ function localTips(clone2) {
         stack.push(p);
         continue;
       }
-      const text = smallFile(p, MAX_REF_BYTES)?.trim();
-      if (text === void 0 || !SHA.test(text)) {
+      const text2 = smallFile(p, MAX_REF_BYTES)?.trim();
+      if (text2 === void 0 || !SHA.test(text2)) {
         return { ok: false, why: "a branch ref is no plain commit id" };
       }
-      tips.add(text);
+      tips.add(text2);
     }
   }
   const packedPath = join31(git2, "packed-refs");
@@ -44251,10 +44577,10 @@ function runsOn(on6, event) {
   if (Array.isArray(on6)) return on6.includes(event);
   return on6 !== null && typeof on6 === "object" && event in on6;
 }
-function readWorkflow(text, path10) {
+function readWorkflow(text2, path10) {
   let doc;
   try {
-    doc = (0, import_yaml11.parse)(text);
+    doc = (0, import_yaml11.parse)(text2);
   } catch {
     return void 0;
   }
@@ -44310,13 +44636,13 @@ async function readWorkflowsAt(git2, dir, oid) {
   const paths = (await g3(["ls-tree", "--name-only", "-z", oid, WORKFLOWS_DIR])).split("\0").filter((p) => p !== "" && WORKFLOW_FILE.test(p));
   const files = /* @__PURE__ */ new Map();
   for (const p of paths) {
-    let text;
+    let text2;
     try {
-      text = await g3(["cat-file", "blob", `${oid}:${p}`]);
+      text2 = await g3(["cat-file", "blob", `${oid}:${p}`]);
     } catch {
-      text = void 0;
+      text2 = void 0;
     }
-    files.set(p, text === void 0 ? void 0 : readWorkflow(text, p));
+    files.set(p, text2 === void 0 ? void 0 : readWorkflow(text2, p));
   }
   return files;
 }
@@ -53525,7 +53851,7 @@ var GIT_ARCHIVE_MS = 3e5;
 var TREE_CAPS = { maxBytes: 128 * 1024 * 1024, maxFiles: 5e4 };
 var MAX_PROOF_OUTPUT = 1024 * 1024;
 var MAX_PROOF_FILE = 256 * 1024 * 1024;
-var digest = (text) => `sha256:${createHash5("sha256").update(text).digest("hex")}`;
+var digest = (text2) => `sha256:${createHash5("sha256").update(text2).digest("hex")}`;
 var short = (sha) => sha.slice(0, 12);
 var guardName = (r) => `${r.guard.workflow} / ${r.guard.job}`;
 var sameKey = (e, k) => e.rule === k.rule && e.repo === k.repo && e.pr === k.pr && e.base.toLowerCase() === k.base.toLowerCase() && e.head.toLowerCase() === k.head.toLowerCase();
@@ -53605,14 +53931,14 @@ function retryAllowed(stateRoot, key, now) {
 }
 var g = (ctx, args, timeoutMs = GIT_LOCAL_MS4) => ctx.git.run(ctx.checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
 async function rulesAt(ctx, oid) {
-  let text;
+  let text2;
   try {
-    text = await g(ctx, ["cat-file", "blob", `${oid}:${STUDIO_CONFIG2}`]);
+    text2 = await g(ctx, ["cat-file", "blob", `${oid}:${STUDIO_CONFIG2}`]);
   } catch {
     return [];
   }
   try {
-    return parseConfig(text, `${short(oid)}:${STUDIO_CONFIG2}`).evidence ?? [];
+    return parseConfig(text2, `${short(oid)}:${STUDIO_CONFIG2}`).evidence ?? [];
   } catch {
     return [];
   }
@@ -53623,9 +53949,9 @@ var canonical = (v) => JSON.stringify(
   (_k, x) => x !== null && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a2], [b]) => a2 < b ? -1 : 1)) : x
 );
 async function rawOwnerBlocksAt(ctx, oid) {
-  let text;
+  let text2;
   try {
-    text = await g(ctx, ["cat-file", "blob", `${oid}:${STUDIO_CONFIG2}`]);
+    text2 = await g(ctx, ["cat-file", "blob", `${oid}:${STUDIO_CONFIG2}`]);
   } catch {
     return {
       evidence: "null",
@@ -53639,9 +53965,9 @@ async function rawOwnerBlocksAt(ctx, oid) {
   }
   let raw;
   try {
-    raw = (0, import_yaml12.parse)(text);
+    raw = (0, import_yaml12.parse)(text2);
   } catch {
-    const u2 = `unparsable:${digest(text)}`;
+    const u2 = `unparsable:${digest(text2)}`;
     return {
       evidence: u2,
       release: u2,
@@ -54251,13 +54577,13 @@ function stageSince(item) {
   }
   return since;
 }
-function coded(code, text) {
-  const reason = reasonOf(text);
-  return reason === void 0 ? { code, text } : { code, text, reason };
+function coded(code, text2) {
+  const reason = reasonOf(text2);
+  return reason === void 0 ? { code, text: text2 } : { code, text: text2, reason };
 }
-var ciWait = (text, ci) => ({
+var ciWait = (text2, ci) => ({
   code: "ci_capacity",
-  text,
+  text: text2,
   busy: ci.busy,
   total: ci.total,
   max: ci.mergeMaxBusy
@@ -54270,8 +54596,8 @@ function waitOf(item, stage, board, queue, ci, tick) {
   }
   if (stage === "pr_held") {
     const note = notes.findLast((n4) => n4.startsWith(PR_HELD)) ?? PR_HELD;
-    const text = line(note.slice(PR_HELD.length));
-    return text.startsWith("ci capacity") ? ciWait(text, ci) : coded("held", text);
+    const text2 = line(note.slice(PR_HELD.length));
+    return text2.startsWith("ci capacity") ? ciWait(text2, ci) : coded("held", text2);
   }
   if (stage === "review") {
     if (item.pr === void 0) return void 0;
@@ -55146,10 +55472,10 @@ var isFileEntry = (dir, name) => {
     return false;
   }
 };
-function depStacks(text, notes, name) {
+function depStacks(text2, notes, name) {
   let raw;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(text2);
   } catch {
     notes.push(`${name}: not valid JSON`);
     return [];
@@ -55226,15 +55552,15 @@ function detectStacks(dir) {
 }
 function runSetupStack(o2) {
   const file4 = join41(o2.project, ".studio", "studio.yaml");
-  let text;
+  let text2;
   try {
-    text = readFileSync39(file4, "utf8");
+    text2 = readFileSync39(file4, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
     );
   }
-  const doc = (0, import_yaml14.parseDocument)(text);
+  const doc = (0, import_yaml14.parseDocument)(text2);
   if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
   const { stacks, notes } = detectStacks(o2.project);
   let stored = [];
@@ -55536,15 +55862,15 @@ ${BOARD_IGNORE}
 `;
 function ignoreBoard(project) {
   const file4 = join42(project, ".gitignore");
-  let text = "";
+  let text2 = "";
   if (exists3(file4)) {
     const st = lstatSync34(file4);
     if (st.isSymbolicLink() || !st.isFile()) throw new Error(".gitignore is not a plain file");
-    text = readFileSync40(file4, "utf8");
+    text2 = readFileSync40(file4, "utf8");
   }
-  if (text.split(/\r?\n/).some((l) => l.trim() === BOARD_IGNORE)) return;
-  const sep9 = text === "" || text.endsWith("\n") ? "" : "\n";
-  writeFileSync14(file4, `${text}${sep9}${text === "" ? "" : "\n"}${BOARD_IGNORE_TEXT}`);
+  if (text2.split(/\r?\n/).some((l) => l.trim() === BOARD_IGNORE)) return;
+  const sep9 = text2 === "" || text2.endsWith("\n") ? "" : "\n";
+  writeFileSync14(file4, `${text2}${sep9}${text2 === "" ? "" : "\n"}${BOARD_IGNORE_TEXT}`);
 }
 async function isIgnored(o2, file4) {
   try {
@@ -55574,14 +55900,14 @@ function nextSteps(prefix, written, checks, launcher2) {
   ];
 }
 function writeBoth(o2, dir, files) {
-  const write = o2.writeFile ?? ((path10, text) => writeFileSync14(path10, text, { flag: "wx" }));
+  const write = o2.writeFile ?? ((path10, text2) => writeFileSync14(path10, text2, { flag: "wx" }));
   const madeDir = !exists3(dir);
   if (madeDir) mkdirSync11(dir);
   if (!isRealDir3(dir)) throw new Error(".studio is not a directory: nothing written");
   const done = [];
   try {
-    for (const [path10, text] of files) {
-      write(path10, text);
+    for (const [path10, text2] of files) {
+      write(path10, text2);
       done.push(path10);
     }
   } catch (e) {
@@ -56130,10 +56456,10 @@ var toRunUsage = (u2) => u2 === void 0 ? void 0 : {
   costUsd: u2.costUsd,
   ...u2.estimated ? { estimated: true } : {}
 };
-function looksSecret(text, known = []) {
-  if (known.some((k) => k.length >= 8 && text.includes(k))) return true;
+function looksSecret(text2, known = []) {
+  if (known.some((k) => k.length >= 8 && text2.includes(k))) return true;
   return /(gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abposr]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/.test(
-    text
+    text2
   );
 }
 
@@ -56675,7 +57001,7 @@ function projectFile(project, file4) {
   if (link2) throw new Error(`${JSON.stringify(file4)}: is a link; give the file itself`);
   return { full, rel: rel.split(sep8).join("/") };
 }
-function writeRoadmap(project, out, text, force) {
+function writeRoadmap(project, out, text2, force) {
   const { full: file4, rel } = projectFile(project, out);
   const parts = rel.split("/");
   if (parts[0] === ".studio" || parts.includes(".git")) {
@@ -56695,10 +57021,10 @@ function writeRoadmap(project, out, text, force) {
       `${out} was not generated by studio roadmap: import its phases with studio roadmap import ${out}, or overwrite it with --force`
     );
   }
-  if (old === text) return { written: out, changed: false };
+  if (old === text2) return { written: out, changed: false };
   const tmp = join44(dirname15(file4), `.${process.pid}.${Date.now()}.roadmap.tmp`);
   try {
-    writeFileSync15(tmp, text, { flag: "wx" });
+    writeFileSync15(tmp, text2, { flag: "wx" });
     renameSync14(tmp, file4);
   } catch (err) {
     rmSync9(tmp, { force: true });
@@ -56737,10 +57063,10 @@ function withoutComments(s) {
     at2 = close + 3;
   }
 }
-function parsePhases(text) {
+function parsePhases(text2) {
   const phases = [];
   const skipped = [];
-  const lines2 = text.split("\n");
+  const lines2 = text2.split("\n");
   for (let i2 = 0; i2 < lines2.length; i2++) {
     const raw = lines2[i2].replace(/\r$/, "");
     const line4 = i2 + 1;
@@ -57636,16 +57962,16 @@ var fileOf = (stateRoot) => join46(stateRoot, "flaky.json");
 function read2(stateRoot) {
   const file4 = fileOf(stateRoot);
   assertStatePath(stateRoot, file4);
-  let text;
+  let text2;
   try {
-    text = readFileSync44(file4, "utf8");
+    text2 = readFileSync44(file4, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error("flaky.json cannot be read");
   }
   let raw;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(text2);
   } catch {
     throw new Error("flaky.json is not valid JSON");
   }
@@ -57697,16 +58023,16 @@ var entrySchema4 = external_exports.strictObject({
 function readLedger2(stateRoot) {
   const file4 = join47(stateRoot, RERUNS_FILE);
   assertStatePath(stateRoot, file4);
-  let text;
+  let text2;
   try {
-    text = readFileSync45(file4, "utf8");
+    text2 = readFileSync45(file4, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error(`${RERUNS_FILE} cannot be read`);
   }
   let raw;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(text2);
   } catch {
     throw new Error(`${RERUNS_FILE} is not valid JSON`);
   }
@@ -58190,7 +58516,7 @@ var CONSTRAINTS = /* @__PURE__ */ new Set([
   "REFERENCES",
   "EXCLUDE"
 ]);
-var isP = (t, text) => t?.kind === "punct" && t.text === text;
+var isP = (t, text2) => t?.kind === "punct" && t.text === text2;
 var isNumber = (t) => t?.kind === "punct" && /^[0-9]+$/.test(t.text);
 var isNameLike = (t) => t !== void 0 && (t.kind === "word" || t.kind === "name");
 function closing(s, open4) {
@@ -58605,7 +58931,7 @@ var releaseSchema = external_exports.strictObject({
   reason: line2(600).optional()
 });
 var fileSchema2 = external_exports.strictObject({ v: external_exports.literal(1), releases: external_exports.array(releaseSchema) });
-var digest2 = (text) => `sha256:${createHash7("sha256").update(text).digest("hex")}`;
+var digest2 = (text2) => `sha256:${createHash7("sha256").update(text2).digest("hex")}`;
 var short2 = (sha) => sha.slice(0, 7);
 var clean6 = (s, max) => s.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
 var quote = (p) => JSON.stringify(clean6(p, 300));
@@ -58704,9 +59030,9 @@ async function bytesAt(git2, co, sha, path10) {
   return git2.blob(co.dir, oid, { timeoutMs: GIT_LOCAL_MS5 });
 }
 async function ruleAt(git2, co, sha, componentId3) {
-  const text = await readAt(git2, co, sha, STUDIO_CONFIG3);
-  if (text === void 0) throw new Error(`no ${STUDIO_CONFIG3} at ${short2(sha)}`);
-  const config2 = parseConfig(text, `${short2(sha)}:${STUDIO_CONFIG3}`);
+  const text2 = await readAt(git2, co, sha, STUDIO_CONFIG3);
+  if (text2 === void 0) throw new Error(`no ${STUDIO_CONFIG3} at ${short2(sha)}`);
+  const config2 = parseConfig(text2, `${short2(sha)}:${STUDIO_CONFIG3}`);
   const component = config2.components?.find((c3) => c3.id === componentId3);
   if (component === void 0) {
     throw new Error(`component ${componentId3} is not in ${STUDIO_CONFIG3} at ${short2(sha)}`);
@@ -58815,9 +59141,9 @@ async function viewRun(gh, repo, run2) {
     return void 0;
   }
 }
-function runFromOutput(repo, text) {
+function runFromOutput(repo, text2) {
   const esc2 = repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = new RegExp(`https://github\\.com/${esc2}/actions/runs/(\\d{1,15})\\b`, "i").exec(text);
+  const m = new RegExp(`https://github\\.com/${esc2}/actions/runs/(\\d{1,15})\\b`, "i").exec(text2);
   return m === null ? void 0 : Number(m[1]);
 }
 async function findDispatchedRun(gh, repo, workflowId, branch, floor) {
@@ -58853,11 +59179,11 @@ async function findDispatchedRun(gh, repo, workflowId, branch, floor) {
 }
 async function dispatchProblem(git2, co, sha, file4, o2) {
   const crewAllowed = o2.crewAllowed;
-  const text = await readAt(git2, co, sha, file4);
-  if (text === void 0) return `${file4} is not in ${short2(sha)}`;
+  const text2 = await readAt(git2, co, sha, file4);
+  if (text2 === void 0) return `${file4} is not in ${short2(sha)}`;
   let raw;
   try {
-    raw = (0, import_yaml16.parse)(text);
+    raw = (0, import_yaml16.parse)(text2);
   } catch {
     return `${file4} at ${short2(sha)} is no valid YAML`;
   }
@@ -58872,7 +59198,7 @@ async function dispatchProblem(git2, co, sha, file4, o2) {
     if (triggers2.length === 0 || other.length > 0) {
       return `${file4} may only run on workflow_dispatch${other.length > 0 ? `, not on ${other.map((t) => clean6(String(t), 40)).join(", ")}` : ""}`;
     }
-    if (!/\binputs\.sha\b/.test(text)) {
+    if (!/\binputs\.sha\b/.test(text2)) {
       return `${file4} does not use inputs.${SHA_INPUT}: it would deploy something other than the release commit`;
     }
   }
@@ -58884,9 +59210,9 @@ async function dispatchProblem(git2, co, sha, file4, o2) {
   return void 0;
 }
 var prSchema3 = external_exports.object({ mergeCommit: external_exports.object({ oid: external_exports.string() }).nullish() });
-function configNames(text) {
+function configNames(text2) {
   const out = /* @__PURE__ */ new Set();
-  for (const l of (text ?? "").split("\n")) {
+  for (const l of (text2 ?? "").split("\n")) {
     const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]{0,99})\s*[=:]/.exec(l);
     if (m !== null && !l.trimStart().startsWith("#")) out.add(m[1]);
   }
@@ -59130,15 +59456,15 @@ function resolveRelease(ctx, rec, o2) {
     ...o2.deployed ? { deployedAt: at2 } : {}
   };
 }
-function verbatim(text, max, flag) {
-  if (text.trim() === "") throw new Error(`${flag} needs text`);
-  if ([...text].length > max)
+function verbatim(text2, max, flag) {
+  if (text2.trim() === "") throw new Error(`${flag} needs text`);
+  if ([...text2].length > max)
     throw new Error(`${flag} is longer than ${max} characters; nothing recorded`);
-  if (/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(text)) {
+  if (/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(text2)) {
     throw new Error(`${flag} must be one plain line, as said; nothing recorded`);
   }
-  if (looksSecret2(text)) throw new Error(`${flag} looks like a credential; nothing recorded`);
-  return text;
+  if (looksSecret2(text2)) throw new Error(`${flag} looks like a credential; nothing recorded`);
+  return text2;
 }
 var nextId3 = (releases, component) => {
   const prefix = `${component}-`;
@@ -60241,11 +60567,11 @@ function isDir3(p) {
   }
 }
 function markerOrigin(root) {
-  const text = plainFile(join51(root, "marker.json"));
-  if (text === void 0) throw new Error(`${root} has no marker.json: it is not a state root`);
+  const text2 = plainFile(join51(root, "marker.json"));
+  if (text2 === void 0) throw new Error(`${root} has no marker.json: it is not a state root`);
   let m;
   try {
-    m = JSON.parse(text);
+    m = JSON.parse(text2);
   } catch {
     throw new Error(`${join51(root, "marker.json")} is unreadable`);
   }
@@ -60284,7 +60610,7 @@ async function busy(root, label, ports, now) {
   }
   return why;
 }
-var lines = (text) => text.split("\n").filter((l) => l.trim() !== "");
+var lines = (text2) => text2.split("\n").filter((l) => l.trim() !== "");
 var doneKey = (d) => `${d.repo}#${d.pr}|${d.result}|${d.at}`;
 async function adoptStateRoot(o2) {
   const from = resolve10(o2.from);
@@ -60446,7 +60772,7 @@ var COMMANDS = [
     about: "Serve offered items of this label on this machine: claim one, run its crew, open its pull request, hand the report back"
   },
   {
-    usage: "worker windows-setup",
+    usage: "worker windows-setup [--no-firewall]",
     about: "Print the one-time PowerShell script of the group of the Windows crew users, one per job (run it elevated)"
   },
   {
@@ -60466,7 +60792,7 @@ var COMMANDS = [
     about: "On the lead: pin the host key the worker proves with the pairing secret; write workers.relay.<label>"
   },
   {
-    usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--i-am-local] [--force-stop]",
+    usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--i-am-local] [--force-stop]",
     about: "On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead"
   },
   {
@@ -60478,7 +60804,7 @@ var COMMANDS = [
     about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key"
   },
   {
-    usage: "relay setup [--home <dir>] [--user <name>]",
+    usage: "relay setup [--home <dir>] [--user <name>] [--no-firewall]",
     about: "Print the setup script of a Windows relay worker, to run elevated by hand (relay install runs it)"
   },
   {
@@ -60650,11 +60976,11 @@ var COMMANDS = [
 ];
 var WIDTH = 100;
 var COLUMN = 27;
-function wrap(text, indent, first = indent) {
+function wrap(text2, indent, first = indent) {
   const lines2 = [];
   let line4 = "";
   let pad = first;
-  for (const word2 of text.split(" ")) {
+  for (const word2 of text2.split(" ")) {
     if (line4 !== "" && pad + line4.length + 1 + word2.length > WIDTH) {
       lines2.push(" ".repeat(pad) + line4);
       line4 = word2;
@@ -60813,12 +61139,12 @@ var SECRET = [
 var PII_FIELD = /\b(first_?name|last_?name|sur_?name|full_?name|given_?name|birth_?(date|day)|date_of_birth|dob|street|house_?number|postal_?code|zip_?code|phone(_?number)?|mobile|email(_?address)?|iban|ssn|tax_?id|patient(_?name)?|customer(_?name)?)\b["']?\s*[:=]\s*["']?([^\s"',;|}]{2,})/gi;
 var FIELD_VALUE_OK = /^(string|text|varchar|char|int|integer|bigint|smallint|number|float|double|decimal|bool|boolean|date|datetime|timestamp|blob|binary|bytes|uuid|json|null|none|nil|true|false|optional|required|unknown|n\/a|tbd|redacted|masked|<[^>]*>|\[[^\]]*\]|\{[^}]*\}|\*+|x+|\.{2,}|\w*\(.*\)|\?)$/i;
 var LINE_LIMIT = 4e3;
-function privacyHits(text, file4) {
+function privacyHits(text2, file4) {
   const hits = [];
   const add = (kind, line4) => {
     if (!hits.some((h2) => h2.kind === kind && h2.line === line4)) hits.push({ kind, line: line4, file: file4 });
   };
-  const lines2 = text.split(/\r?\n/);
+  const lines2 = text2.split(/\r?\n/);
   const delim = lines2.map(
     (l) => (l.match(/\t/g)?.length ?? 0) * 100 + (l.match(/,/g)?.length ?? 0)
   );
@@ -60944,12 +61270,12 @@ async function openCrewPr(ports, item, title, body, notRunHere, token, capacity,
   const plainTitle = title.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
   if (plainTitle === "")
     throw new Error(`the pull request title for ${head} is empty; nothing moved`);
-  const text = crewPrText(item, body, notRunHere);
+  const text2 = crewPrText(item, body, notRunHere);
   const withBody = async (use) => {
     const dir = mkdtempSync2(join53(tmpdir2(), "studio-pr-"));
     try {
       const file4 = join53(dir, "body.md");
-      writeFileSync16(file4, text, { mode: 384 });
+      writeFileSync16(file4, text2, { mode: 384 });
       return await use(file4);
     } finally {
       rmSync10(dir, { recursive: true, force: true });
@@ -61929,13 +62255,13 @@ function keyscanKey(stdout) {
 }
 function writeRelayTarget(owner, label, t) {
   const file4 = ownerConfigFile(owner);
-  let text = "";
+  let text2 = "";
   try {
-    text = readFileSync51(file4, "utf8");
+    text2 = readFileSync51(file4, "utf8");
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
-  const doc = (0, import_yaml17.parseDocument)(text === "" ? "{}" : text);
+  const doc = (0, import_yaml17.parseDocument)(text2 === "" ? "{}" : text2);
   if (doc.errors.length > 0) throw new Error(`${file4}: invalid YAML; nothing changed`);
   if (!(0, import_yaml17.isMap)(doc.contents)) throw new Error(`${file4}: not a map; nothing changed`);
   doc.setIn(["workers", "relay", label], {
@@ -61957,8 +62283,8 @@ function writeRelayTarget(owner, label, t) {
   try {
     loadOwnerConfig(owner);
   } catch (e) {
-    if (text === "") rmSync11(file4, { force: true });
-    else writeFileSync18(file4, text, { mode: 384 });
+    if (text2 === "") rmSync11(file4, { force: true });
+    else writeFileSync18(file4, text2, { mode: 384 });
     throw e;
   }
 }
@@ -62098,8 +62424,8 @@ async function pinnedMain2(project, ports) {
   const g3 = (args) => ports.git.run(project, ["--no-replace-objects", ...args]);
   const sha = (await g3(["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"])).trim();
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("origin/main is not a commit SHA");
-  const text = await g3(["show", `${sha}:.studio/studio.yaml`]);
-  return { config: parseConfig(text, `origin/main:.studio/studio.yaml`), sha };
+  const text2 = await g3(["show", `${sha}:.studio/studio.yaml`]);
+  return { config: parseConfig(text2, `origin/main:.studio/studio.yaml`), sha };
 }
 var CONTENT_PATH = /^\.studio\/(roles|solutions)\/[A-Za-z0-9._-]{1,100}\.md$/;
 async function pinnedContent(c3, stateRoot, sha) {
@@ -62115,10 +62441,10 @@ async function pinnedContent(c3, stateRoot, sha) {
   for (const line4 of tree.split("\n")) {
     const m = /^100644 blob ([0-9a-f]{40})\t(.+)$/.exec(line4);
     if (!m || !CONTENT_PATH.test(m[2]) || n4++ >= 500) continue;
-    const text = await g3(["cat-file", "blob", m[1]]);
+    const text2 = await g3(["cat-file", "blob", m[1]]);
     const file4 = join57(dir, m[2]);
     ensureStateDir(stateRoot, dirname17(file4));
-    writeStateFile(stateRoot, file4, `${text}
+    writeStateFile(stateRoot, file4, `${text2}
 `);
   }
   writeStateFile(stateRoot, join57(dir, ".complete"), `${sha}
@@ -62444,14 +62770,14 @@ async function flushPending(c3, stateRoot, force) {
   if (p === void 0) return;
   const now = c3.ports.clock.now();
   if (!force && now.getTime() < Date.parse(p.nextAt)) return;
-  const text = claimComment(p.sha, p.nonce);
+  const text2 = claimComment(p.sha, p.nonce);
   try {
     const exists4 = p.tries > 0 && await (async () => {
       const me = await c3.hub.user();
       const read3 = await c3.hub.offerComments(p.repo, p.offer);
-      return read3.comments.some((x) => x.userId === me.id && x.body === text);
+      return read3.comments.some((x) => x.userId === me.id && x.body === text2);
     })();
-    if (!exists4) await c3.hub.commentOffer(p.repo, p.offer, text);
+    if (!exists4) await c3.hub.commentOffer(p.repo, p.offer, text2);
     saveWorkerState(stateRoot, {
       label: c3.label,
       ...state.current === void 0 ? {} : { current: state.current },
@@ -62617,16 +62943,16 @@ async function finish(c3, stateRoot, state, held2, repo, rec, touch) {
     await release(c3, stateRoot, state, cur, repo, reason, usage);
     return { kind: "released", item: id, line: `${id}: ${reason}; released` };
   };
-  let text;
+  let text2;
   let report;
   try {
     const fileName = reportName(stateRoot, id);
     if (fileName === void 0) throw new ReportError("no report name was drawn for this run");
-    text = readReportText(join57(stateRoot, "clones", id), id, {
+    text2 = readReportText(join57(stateRoot, "clones", id), id, {
       notBefore: new Date(rec.startedAt),
       fileName
     });
-    report = parseReport(text, cur.item);
+    report = parseReport(text2, cur.item);
   } catch (e) {
     noteLimitOrBlock(c3, stateRoot, id, from, rec.label);
     return releaseWith(
@@ -62638,7 +62964,7 @@ async function finish(c3, stateRoot, state, held2, repo, rec, touch) {
     ...c3.secrets ?? [],
     ...c3.owner.env?.CLAUDE_CODE_OAUTH_TOKEN ? [c3.owner.env.CLAUDE_CODE_OAUTH_TOKEN] : []
   ];
-  if (looksSecret(text, known)) {
+  if (looksSecret(text2, known)) {
     return releaseWith("the report looks like it holds a credential; it stays on the worker");
   }
   if ((await c3.hub.readClaim(repo, id))?.sha !== cur.claimSha) {
@@ -62691,7 +63017,7 @@ async function finish(c3, stateRoot, state, held2, repo, rec, touch) {
     ...usage.runs === 0 ? {} : { usage: usageField(usage) }
   };
   const wrote = await writeClaim(c3, repo, claim2, cur.claimSha, {
-    "report.md": text,
+    "report.md": text2,
     ...usage.runs === 0 ? {} : { "usage.json": `${JSON.stringify(usageField(usage), null, 2)}
 ` }
   });
@@ -63056,12 +63382,12 @@ async function takeBundle(c3, job, bundle) {
 }
 async function jobInputs(c3, job) {
   const project = projectDir(c3, job.repo);
-  const text = await git(c3, project, [
+  const text2 = await git(c3, project, [
     "--no-replace-objects",
     "show",
     `${job.sha}:.studio/studio.yaml`
   ]);
-  const config2 = parseConfig(text, "origin/main:.studio/studio.yaml");
+  const config2 = parseConfig(text2, "origin/main:.studio/studio.yaml");
   if (config2.primaryRepo !== job.repo) {
     throw new Error(`the pinned studio.yaml names ${config2.primaryRepo}, not ${job.repo}`);
   }
@@ -63334,12 +63660,12 @@ async function collect2(c3, id, out) {
     problem: null
   };
   const item = workerItemOf(j.item, j.label);
-  let text;
+  let text2;
   try {
     const fileName = reportName(stateRoot, id);
     if (fileName === void 0 || crew === void 0)
       throw new Error("no report name was drawn for this run");
-    text = readReportText(join58(stateRoot, "clones", id), id, {
+    text2 = readReportText(join58(stateRoot, "clones", id), id, {
       notBefore: new Date(crew.startedAt),
       fileName
     });
@@ -63354,12 +63680,12 @@ async function collect2(c3, id, out) {
   }
   let report;
   try {
-    report = parseReport(text, item);
+    report = parseReport(text2, item);
   } catch {
     report = void 0;
   }
   if (report?.status !== "done" || !opensPr2(item) || report.headSha === void 0) {
-    return answer(out, { ...base2, report: text, headSha: null, payload: false });
+    return answer(out, { ...base2, report: text2, headSha: null, payload: false });
   }
   const head = report.headSha.toLowerCase();
   const root = relayRoot(c3.owner);
@@ -63388,7 +63714,7 @@ async function collect2(c3, id, out) {
     } catch (e) {
       return answer(out, {
         ...base2,
-        report: text,
+        report: text2,
         headSha: null,
         payload: false,
         problem: `the crew's clone cannot be read safely: ${e.message}`
@@ -63399,7 +63725,7 @@ async function collect2(c3, id, out) {
     if (problem !== void 0) {
       return answer(out, {
         ...base2,
-        report: text,
+        report: text2,
         headSha: null,
         payload: false,
         problem: `the crew's objects do not check out: ${problem}`
@@ -63410,7 +63736,7 @@ async function collect2(c3, id, out) {
     if (got !== head) {
       return answer(out, {
         ...base2,
-        report: text,
+        report: text2,
         headSha: null,
         payload: false,
         problem: "the branch in the clone differs from the report"
@@ -63423,7 +63749,7 @@ async function collect2(c3, id, out) {
     } catch {
       return answer(out, {
         ...base2,
-        report: text,
+        report: text2,
         headSha: null,
         payload: false,
         problem: "the crew committed nothing on top of the pinned commit"
@@ -63433,13 +63759,13 @@ async function collect2(c3, id, out) {
     if (bytes.length > MAX_RESULT_BUNDLE_BYTES) {
       return answer(out, {
         ...base2,
-        report: text,
+        report: text2,
         headSha: null,
         payload: false,
         problem: "the branch is larger than a relay result may be"
       });
     }
-    return answer(out, { ...base2, report: text, headSha: head, payload: true }, bytes);
+    return answer(out, { ...base2, report: text2, headSha: head, payload: true }, bytes);
   } finally {
     removeStateEntry(root, dir);
   }
@@ -63737,6 +64063,7 @@ function parseInstallRecord(raw) {
   if (p !== null && typeof p === "object") {
     const rule = p.sshdRule;
     const cap = p.sshdCapability;
+    const pnp = p.pointAndPrint;
     const webClient = service(p.webClient);
     const spooler = service(p.spooler);
     const sshd = service(p.sshd);
@@ -63750,7 +64077,13 @@ function parseInstallRecord(raw) {
           ...typeof rule.enabled === "string" ? { enabled: rule.enabled } : {}
         }
       } : {},
-      ...cap !== void 0 && cap !== null && typeof cap.name === "string" ? { sshdCapability: { name: cap.name, state: String(cap.state) } } : {}
+      ...cap !== void 0 && cap !== null && typeof cap.name === "string" ? { sshdCapability: { name: cap.name, state: String(cap.state) } } : {},
+      ...pnp !== void 0 && pnp !== null && typeof pnp.exists === "boolean" ? {
+        pointAndPrint: {
+          exists: pnp.exists,
+          ...Number.isInteger(pnp.value) ? { value: pnp.value } : {}
+        }
+      } : {}
     };
   }
   const paths = Array.isArray(r.readPaths) ? r.readPaths : r.readPaths === void 0 ? [] : [r.readPaths];
@@ -63761,6 +64094,7 @@ function parseInstallRecord(raw) {
     ...str("home"),
     readPaths: paths.filter((x) => typeof x === "string"),
     spoolerDisabled: r.spoolerDisabled === true,
+    ...typeof r.firewall === "boolean" ? { firewall: r.firewall } : {},
     prior
   };
 }
@@ -63809,6 +64143,18 @@ function restoreSteps(record2) {
       `  Remove-WindowsCapability -Online -Name ${psQuote(cap.name)} | Out-Null`,
       "  Write-Output 'removed: the OpenSSH server the install added'",
       "}"
+    );
+  }
+  const pnp = prior?.pointAndPrint;
+  if (pnp?.exists === false) {
+    out.push(
+      `Remove-ItemProperty -LiteralPath '${POINT_AND_PRINT_KEY}' -Name RestrictDriverInstallationToAdministrators -ErrorAction SilentlyContinue`,
+      "Write-Output 'restored: RestrictDriverInstallationToAdministrators unset, as before the install'"
+    );
+  } else if (pnp?.exists === true && pnp.value !== void 0) {
+    out.push(
+      `Set-ItemProperty -LiteralPath '${POINT_AND_PRINT_KEY}' -Name RestrictDriverInstallationToAdministrators -Type DWord -Value ${pnp.value}`,
+      `Write-Output 'restored: RestrictDriverInstallationToAdministrators=${pnp.value}, as before the install'`
     );
   }
   if (prior?.sshdRule?.exists === true && prior.sshdRule.enabled === "True") {
@@ -63936,6 +64282,7 @@ if (Test-Path -LiteralPath $conf) {
   }
 }
 Get-NetFirewallRule -DisplayName 'Studio relay: sshd' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+Get-NetFirewallRule -Group ${psQuote(LOCKDOWN_GROUP)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 ${step(8, o2.keepTree ? "the admin-only tree and the relay home stay (--keep-tree)" : "the admin-only tree and the relay home")}
 ${o2.keepTree ? "" : `foreach ($p in @($home_, $machine)) {
   $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
@@ -64171,6 +64518,14 @@ function relayWindows(o2) {
           },
           warnings: warnings2
         };
+      }
+      if (readInstallRecord(o2.machine)?.firewall === false) {
+        warnings2.push(
+          "no network lockdown (studio relay install --no-firewall): the relay account can reach the local network"
+        );
+      } else {
+        const lock = await (o2.lockdown ?? lockdownProblem)(run2);
+        if (lock !== void 0) return { problem: { kind: "refused", line: lock }, warnings: warnings2 };
       }
       const web = await webClientProblem(run2);
       if (web !== void 0) return { problem: { kind: "held", line: web }, warnings: warnings2 };
@@ -64454,10 +64809,10 @@ function fetchTransport(token, doFetch = fetch) {
           redirect: "error",
           signal: AbortSignal.timeout(TIMEOUT_MS)
         });
-        const text = await r.text();
+        const text2 = await r.text();
         let json2 = null;
         try {
-          json2 = text.trim() === "" ? null : JSON.parse(text);
+          json2 = text2.trim() === "" ? null : JSON.parse(text2);
         } catch {
           json2 = null;
         }
@@ -65590,8 +65945,17 @@ async function runRelayCommand(o2) {
   }
   if (sub === "setup" && args.length === 0) {
     if (o2.values.pair !== void 0) throw new Error("--pair works with relay install only");
+    const lockdown = await relayLockdown({ ...o2, home, machine, exec: o2.exec ?? systemExec });
     o2.stdout(
-      setupScriptFor({ owner: o2.owner, env: o2.env, home, machine, relayUser, install: void 0 })
+      setupScriptFor({
+        owner: o2.owner,
+        env: o2.env,
+        home,
+        machine,
+        relayUser,
+        install: void 0,
+        lockdown
+      })
     );
     return 0;
   }
@@ -65603,7 +65967,15 @@ async function runRelayCommand(o2) {
       relayUser,
       pair,
       machine,
-      script: (i2) => setupScriptFor({ owner: o2.owner, env: o2.env, home, machine, relayUser, install: i2 })
+      script: async (i2) => setupScriptFor({
+        owner: o2.owner,
+        env: o2.env,
+        home,
+        machine,
+        relayUser,
+        install: i2,
+        lockdown: await relayLockdown({ ...o2, home, machine, exec: o2.exec ?? systemExec })
+      })
     });
   }
   if (sub === "uninstall" && args.length === 0) {
@@ -65658,7 +66030,15 @@ function setupScriptFor(o2) {
       ...loadOwnerConfig(o2.owner).crewToolchainPaths
     ],
     source: { node: process.execPath, studio: resolve13(dirname19(STUDIO_BIN), "..") },
-    ...o2.install === void 0 ? {} : { install: o2.install }
+    ...o2.install === void 0 ? {} : { install: o2.install },
+    lockdown: o2.lockdown
+  });
+}
+async function relayLockdown(o2) {
+  if (o2.values["no-firewall"] === true) return null;
+  return lockdownFor({
+    resolvers: () => dnsResolvers(o2.exec),
+    deny: serveSettings(relayOwner(o2.owner, o2.home, o2.machine)).deny
   });
 }
 var DEFAULT_SERVE_CONFIG = `# Studio relay worker (studio relay install). Optional; see the README, "Relay workers".
@@ -65764,7 +66144,7 @@ async function install(o2) {
   const file4 = join62(dir, "install.ps1");
   writeFileSync21(
     file4,
-    o2.script({
+    await o2.script({
       port,
       scope,
       ...o2.values["keep-passwords"] === true ? { keepPasswords: true } : {},
@@ -66063,10 +66443,10 @@ function studioOnPath(env) {
   return void 0;
 }
 var yes = (answer2) => /^(|y|yes)$/i.test(answer2.trim());
-function writeAtomic2(file4, text, mode) {
+function writeAtomic2(file4, text2, mode) {
   const tmp = join63(dirname20(file4), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
-    writeFileSync22(tmp, text, { flag: "wx", mode });
+    writeFileSync22(tmp, text2, { flag: "wx", mode });
     chmodSync6(tmp, mode);
     renameSync17(tmp, file4);
   } catch (e) {
@@ -66847,6 +67227,11 @@ async function runCli(argv, deps) {
         "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop and --keep-tree work with relay only"
       );
     }
+    if (values["no-firewall"] !== void 0 && cmd !== "relay" && cmd !== "worker") {
+      throw new UsageError(
+        "--no-firewall works with relay install, relay setup and worker windows-setup only"
+      );
+    }
     const reserveOnly = [values.number, values.for, values.purpose];
     if (!(cmd === "migration" && rest[0] === "reserve") && reserveOnly.some((v) => v !== void 0)) {
       throw new UsageError("--number, --for and --purpose work with migration reserve only");
@@ -67478,12 +67863,12 @@ async function runCli(argv, deps) {
       if (!proof.ok) {
         throw new ReportError(`the claim of ${item.id} counts for nothing: ${proof.line}`);
       }
-      const text = await leadHub().claimFile(config2.primaryRepo, read3.sha, "report.md");
-      if (text === void 0) throw new ReportError("the done claim carries no report");
-      if (Buffer.byteLength(text) > MAX_REPORT_BYTES) {
+      const text2 = await leadHub().claimFile(config2.primaryRepo, read3.sha, "report.md");
+      if (text2 === void 0) throw new ReportError("the done claim carries no report");
+      if (Buffer.byteLength(text2) > MAX_REPORT_BYTES) {
         throw new ReportError("report file is missing or not a safe regular file");
       }
-      const { pr: _crewPr, ...parsed } = parseReport(text, item);
+      const { pr: _crewPr, ...parsed } = parseReport(text2, item);
       return {
         report: claim2.pr === void 0 ? parsed : { ...parsed, pr: claim2.pr },
         worker: claim2.worker,
@@ -67587,7 +67972,7 @@ async function runCli(argv, deps) {
         report = readReport(clone2, item.id, item, { notBefore, fileName });
       }
       if (item.role === "researcher") {
-        const text = [
+        const text2 = [
           report.body,
           report.prTitle ?? "",
           ...report.findings ?? [],
@@ -67598,7 +67983,7 @@ async function runCli(argv, deps) {
           ...crewStrings(report.analyzers),
           report.mutationProbe ?? ""
         ].join("\n");
-        const hits = privacyHits(text, "report");
+        const hits = privacyHits(text2, "report");
         if (hits.length > 0) throw new ReportError(privacyLine(hits));
       }
       let cached2;
@@ -69056,8 +69441,13 @@ async function runCli(argv, deps) {
               "worker windows-setup needs workers.self.windows.crew_user (the name prefix of the crew users) in the owner config"
             );
           }
+          const lockdown = values["no-firewall"] === true ? null : await lockdownFor({
+            resolvers: () => dnsResolvers(runFile2),
+            deny: ownerConfig.workers?.self?.deny ?? { hosts: [], ports: [] }
+          });
           stdout(
             windowsSetupScript({
+              lockdown,
               prefix,
               crewDir: nativeCrewDir(deps.env),
               readPaths: setupReadPaths({
@@ -69463,8 +69853,8 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
             throw new UsageError("roadmap import takes only --write");
           }
           if (values.write === true) refuseCrew(deps.env);
-          const { source, text: text2 } = readImportFile(project, rest[1]);
-          const parsed = parsePhases(text2);
+          const { source, text: text3 } = readImportFile(project, rest[1]);
+          const parsed = parsePhases(text3);
           const apply = (board) => {
             const p = planImport(board, source, parsed.phases);
             return { ...p, skipped: [...parsed.skipped, ...p.skipped] };
@@ -69490,12 +69880,12 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
           throw new UsageError("--out and --force work with roadmap --write only");
         }
         if (values.write === true) refuseCrew(deps.env);
-        const text = renderRoadmap(loadAll().board);
+        const text2 = renderRoadmap(loadAll().board);
         if (values.write !== true) {
-          stdout(text);
+          stdout(text2);
           return 0;
         }
-        print(writeRoadmap(project, values.out ?? "ROADMAP.md", text, values.force === true));
+        print(writeRoadmap(project, values.out ?? "ROADMAP.md", text2, values.force === true));
         return 0;
       }
       case "plan": {
@@ -70992,7 +71382,8 @@ function parseCli(argv) {
         "i-am-local": { type: "boolean" },
         "force-stop": { type: "boolean" },
         "disable-spooler": { type: "boolean" },
-        "keep-tree": { type: "boolean" }
+        "keep-tree": { type: "boolean" },
+        "no-firewall": { type: "boolean" }
       },
       allowPositionals: true,
       strict: true
@@ -71603,8 +71994,8 @@ function realPorts(claudeBin = "claude") {
         stdin: "ignore",
         timeout: IDENTITY_TIMEOUT_MS
       });
-      const text = r.failed ? "" : String(r.stdout).trim();
-      return text === "" ? void 0 : text;
+      const text2 = r.failed ? "" : String(r.stdout).trim();
+      return text2 === "" ? void 0 : text2;
     },
     async stop(pid) {
       if (!alive(pid)) return;

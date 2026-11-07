@@ -218,6 +218,7 @@ import {
   withdrawRelayItem,
 } from './relay-command.js';
 import { relayReportFile } from './relay-lead.js';
+import { dnsResolvers, lockdownFor } from './relay-lockdown.js';
 import type { RelayContext } from './relay-serve.js';
 import type { RelayTransport } from './relay-transport.js';
 import {
@@ -301,6 +302,7 @@ import {
 import {
   findClaude,
   nativeCrewDir,
+  runFile,
   setupReadPaths,
   windowsSetupScript,
   windowsWorker,
@@ -707,6 +709,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     if (relayOnly.some((v) => v !== undefined) && cmd !== 'relay') {
       throw new UsageError(
         '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop and --keep-tree work with relay only',
+      );
+    }
+    if (values['no-firewall'] !== undefined && cmd !== 'relay' && cmd !== 'worker') {
+      throw new UsageError(
+        '--no-firewall works with relay install, relay setup and worker windows-setup only',
       );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
@@ -3378,8 +3385,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               'worker windows-setup needs workers.self.windows.crew_user (the name prefix of the crew users) in the owner config',
             );
           }
+          const lockdown =
+            values['no-firewall'] === true
+              ? null
+              : await lockdownFor({
+                  resolvers: () => dnsResolvers(runFile),
+                  deny: ownerConfig.workers?.self?.deny ?? { hosts: [], ports: [] },
+                });
           stdout(
             windowsSetupScript({
+              lockdown,
               prefix,
               crewDir: nativeCrewDir(deps.env),
               readPaths: setupReadPaths({
@@ -5461,6 +5476,7 @@ function parseCli(argv: string[]) {
         'force-stop': { type: 'boolean' },
         'disable-spooler': { type: 'boolean' },
         'keep-tree': { type: 'boolean' },
+        'no-firewall': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,
