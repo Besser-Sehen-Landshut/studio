@@ -7,6 +7,7 @@ import {
   type Socket,
   connect as tcpConnect,
 } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { hostPort, normalizeHost } from './worker-deny.js';
 
 /**
@@ -190,6 +191,8 @@ const systemResolve: Resolve = async (host) =>
 export async function checkedAddress(
   resolve: Resolve,
   host: string,
+  /** The networks of this machine, on top of the fixed ranges (`onLinkBlockList`). */
+  extra?: BlockList,
 ): Promise<{ address: string } | { refused: string }> {
   let answers: string[];
   try {
@@ -198,7 +201,10 @@ export async function checkedAddress(
     return { refused: 'does not resolve' };
   }
   if (answers.length === 0) return { refused: 'does not resolve' };
-  const bad = answers.find(blockedAddress);
+  const bad = answers.find(
+    (a) =>
+      blockedAddress(a) || (extra !== undefined && extra.check(a, isIP(a) === 6 ? 'ipv6' : 'ipv4')),
+  );
   if (bad !== undefined) return { refused: `resolves to a local or private address (${bad})` };
   return { address: answers[0] as string };
 }
@@ -211,12 +217,38 @@ function reply(socket: Socket, status: string): void {
  * Starts the proxy on loopback with a free port. An allowed name is resolved by the proxy and
  * the tunnel goes to the checked address. `dial` and `resolve` are seams for tests.
  */
+/**
+ * The networks this machine sits in (every prefix of its interfaces, both families), as the
+ * Windows lockdown blocks them from its routing table: a name that resolves into one is refused
+ * like a private address, also where the network is a public range.
+ */
+export function onLinkBlockList(
+  ifaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
+): BlockList {
+  const b = new BlockList();
+  for (const list of Object.values(ifaces)) {
+    for (const a of list ?? []) {
+      if (a.internal || a.cidr === null) continue;
+      const [net, bits] = a.cidr.split('/');
+      try {
+        b.addSubnet(net as string, Number(bits), a.family === 'IPv6' ? 'ipv6' : 'ipv4');
+      } catch {
+        // not an address BlockList takes
+      }
+    }
+  }
+  return b;
+}
+
 export async function startEgressProxy(o: {
   allow: readonly string[];
   dial?: (address: string, port: number) => Socket;
   resolve?: Resolve;
+  /** The networks of this machine to refuse on top of the fixed ranges; its interfaces by default. */
+  onLink?: BlockList;
 }): Promise<EgressProxy> {
   const rules = allowRules(o.allow);
+  const onLink = o.onLink ?? onLinkBlockList();
   const refused: string[] = [];
   const resolve = o.resolve ?? systemResolve;
   const dial = o.dial ?? ((address: string, port: number) => tcpConnect({ host: address, port }));
@@ -249,7 +281,7 @@ export async function startEgressProxy(o: {
         refuse(client, `${target.host}:${target.port} (${why})`);
         return;
       }
-      void checkedAddress(resolve, target.host).then((checked) => {
+      void checkedAddress(resolve, target.host, onLink).then((checked) => {
         if (client.destroyed) return;
         if ('refused' in checked) {
           refuse(client, `${target.host}:${target.port} (${checked.refused})`);

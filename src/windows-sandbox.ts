@@ -197,7 +197,7 @@ StrictFolder (Join-Path $crewDir 'tmp') @()
 Copy-Item -LiteralPath ${psQuote(TREE_SOURCE())} -Destination (Join-Path $crewDir 'studio-tree.cs') -Force
 Step "the crew users' group: firewall rule, logon rights, read grants"
 ${crewGroupFinish()}Step 'network lockdown and printer drivers'
-${lockdownSection(o.lockdown === undefined ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o.lockdown, '@($groupSid)')}${POINT_AND_PRINT}Write-Output "Done. Studio's crew users (group $($prefix)s) are ready. Next: studio worker --label <label>"
+${lockdownSection(o.lockdown === undefined ? lockdownPlan({ denyHosts: [], denyPorts: [] }) : o.lockdown, '@($groupSid)')}${POINT_AND_PRINT}Write-Output "Done. Studio's crew users (group $($prefix)s) are ready. Next: studio worker --label <label>"
 `);
 }
 

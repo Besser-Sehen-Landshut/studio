@@ -50,7 +50,7 @@ import {
   stopRelay,
   updateRelay,
 } from './relay-lead.js';
-import { dnsResolvers, type LockdownPlan, lockdownFor } from './relay-lockdown.js';
+import { type LockdownPlan, lockdownFor, NO_LOCKDOWN } from './relay-lockdown.js';
 import {
   authorizedKeysPlan,
   dropPending,
@@ -87,11 +87,12 @@ import {
   relayCall,
   sshTransport,
 } from './relay-transport.js';
-import { readInstallRecord, relayUninstallScript } from './relay-uninstall.js';
+import { readInstallRecord, relayUninstallScript, treePathProblem } from './relay-uninstall.js';
 import {
   authorizedKeysFile,
   authorizedKeysScript,
   forcedCommand,
+  installRecordFile,
   leadFromAuthInfo,
   machineConfig,
   type RelayInstall,
@@ -198,6 +199,18 @@ export async function startRelayItem(
     const { answer: hello } = await relayCall(transport, 'hello', {}, { timeoutMs: 60_000 });
     if (!hello.ok) throw new HeldError(relayLine(label, hello.line));
     if (hello.held !== null) throw new HeldError(relayLine(label, hello.held));
+    // A worker without its network lockdown starts nothing unless the lead accepted that.
+    if (
+      hello.warnings.includes(NO_LOCKDOWN) &&
+      relayTarget(ownerConfig, label)?.acceptNoFirewall !== true
+    ) {
+      throw new HeldError(
+        relayLine(
+          label,
+          `${NO_LOCKDOWN}; run studio relay install there without --no-firewall, or accept it with workers.relay.${label}.accept_no_firewall: true`,
+        ),
+      );
+    }
   } catch (e) {
     if (e instanceof RelayUnreachable) throw new HeldError(relayLine(label, 'unreachable'));
     throw e;
@@ -505,6 +518,7 @@ export async function relayDoctorLines(
       label,
       studioVersion: STUDIO_VERSION,
       pins,
+      acceptNoFirewall: relayTarget(ownerConfig, label)?.acceptNoFirewall === true,
     });
     ok &&= r.ok;
     lines.push(...r.lines);
@@ -574,6 +588,7 @@ export function relayContext(o: {
         ? { pairings: machineOf() }
         : {}),
     hostKey: o.hostKey ?? (() => readHostKey(o.env, platform().platform)),
+    ...(native ? { lockdownOff: () => readInstallRecord(machineOf())?.firewall === false } : {}),
     log: o.log,
     ...(native
       ? {
@@ -839,6 +854,8 @@ export interface RelayValues {
   'keep-tree'?: boolean;
   'dry-run'?: boolean;
   'no-firewall'?: boolean;
+  'force-path'?: boolean;
+  'block-smb-lan'?: boolean;
   pair?: string;
   user?: string;
   port?: string;
@@ -851,12 +868,52 @@ export interface RelayValues {
 export type Exec = (
   file: string,
   args: string[],
-  o?: { onOutput?: (s: string) => void; timeoutMs?: number },
+  o?: { onOutput?: (s: string) => void; timeoutMs?: number; input?: string },
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+/**
+ * The PowerShell that runs a script handed over on stdin (base64 of its UTF-8): an elevated script
+ * is never a file in the user's TEMP, which a process of the same user without elevation could
+ * change between writing and running it.
+ */
+const STDIN_RUNNER = Buffer.from(
+  '$s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())); try { & ([ScriptBlock]::Create($s)) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }',
+  'utf16le',
+).toString('base64');
+
+/** Runs an elevated setup script through stdin; `#Requires` lines go (elevation is checked before). */
+export const runScript = (
+  exec: Exec,
+  script: string,
+  onOutput: (s: string) => void,
+): ReturnType<Exec> =>
+  exec(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-EncodedCommand',
+      STDIN_RUNNER,
+    ],
+    {
+      onOutput,
+      input: Buffer.from(script.replace(/^#Requires .*\r?\n/gm, ''), 'utf8').toString('base64'),
+    },
+  );
+
+/** The script `runScript` handed over, for tests: undefined for any other call. */
+export const scriptOfRun = (o: { input?: string } | undefined): string | undefined =>
+  o?.input === undefined ? undefined : Buffer.from(o.input, 'base64').toString('utf8');
 
 const systemExec: Exec = (file, args, o = {}) =>
   new Promise((res) => {
-    const child = spawn(file, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(file, args, {
+      windowsHide: true,
+      stdio: [o.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    });
+    if (o.input !== undefined) child.stdin?.end(o.input);
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => child.kill(), o.timeoutMs ?? 30 * 60_000);
@@ -909,8 +966,8 @@ function setupScriptFor(o: {
 }
 
 /**
- * The network lockdown of this relay worker (src/relay-lockdown.ts): the local ranges, its DNS
- * resolvers left open on port 53, and the deny list of its config; null with `--no-firewall`.
+ * The network lockdown of this relay worker (src/relay-lockdown.ts): the local ranges and the deny
+ * list of its config; null with `--no-firewall`.
  */
 async function relayLockdown(o: {
   values: RelayValues;
@@ -921,8 +978,8 @@ async function relayLockdown(o: {
 }): Promise<LockdownPlan | null> {
   if (o.values['no-firewall'] === true) return null;
   return lockdownFor({
-    resolvers: () => dnsResolvers(o.exec),
     deny: serveSettings(relayOwner(o.owner, o.home, o.machine)).deny,
+    blockSmbLan: o.values['block-smb-lan'] === true,
   });
 }
 
@@ -1084,11 +1141,10 @@ async function install(o: {
     scope = { tailscale: true };
   }
   o.stdout(`${t.installWebClient}\n`);
-  // Nothing of the home is made here: the script makes every folder with its own DACL.
-  const dir = mkdtempSync(join(tmpdir(), 'studio-relay-install-'));
-  const file = join(dir, 'install.ps1');
-  writeFileSync(
-    file,
+  // Nothing of the home is made here: the script makes every folder with its own DACL. It goes to
+  // PowerShell on stdin, never as a file.
+  const r = await runScript(
+    exec,
     await o.script({
       port,
       scope,
@@ -1096,17 +1152,8 @@ async function install(o: {
       ...(o.values['disable-spooler'] === true ? { disableSpooler: true } : {}),
       ...(o.values['force-stop'] === true ? { forceStop: true } : {}),
     }),
+    o.stdout,
   );
-  let r: Awaited<ReturnType<Exec>>;
-  try {
-    r = await exec(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file],
-      { onOutput: o.stdout },
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
   if (r.code !== 0) {
     o.stderr(`${t.installStopped}\n`);
     return 1;
@@ -1227,6 +1274,22 @@ async function uninstall(o: {
     );
   }
   const record = readInstallRecord(o.machine);
+  const home = o.home ?? record?.home ?? relayHomeDefault(o.env);
+  if (o.values['keep-tree'] !== true && o.values['force-path'] !== true) {
+    const problem = treePathProblem({
+      home,
+      machine: o.machine,
+      recordedHome: record?.home,
+      defaultHome: relayHomeDefault(o.env),
+      defaultMachine: relayMachineDefault(o.env),
+      machineMarked: existsSync(installRecordFile(o.machine)),
+    });
+    if (problem !== undefined) {
+      throw new Error(
+        `relay uninstall removes no tree it cannot tell is Studio's: ${problem}. Check --home and the path, or keep the trees with --keep-tree (--force-path removes them all the same)`,
+      );
+    }
+  }
   let settings: ReturnType<typeof serveSettings> | undefined;
   try {
     settings = serveSettings(relayOwner(o.owner, o.home ?? relayHomeDefault(o.env), o.machine));
@@ -1238,28 +1301,17 @@ async function uninstall(o: {
     relayUser: o.relayUser ?? record?.relayUser ?? 'studio-relay',
     crewPrefix: record?.crewPrefix ?? settings?.windows?.crewUser ?? 'studio-crew',
     task: record?.task ?? settings?.windows?.broker ?? 'Studio relay broker',
-    home: o.home ?? record?.home ?? relayHomeDefault(o.env),
+    home,
     machine: o.machine,
     readPaths: record?.readPaths ?? [],
     keepTree: o.values['keep-tree'] === true,
     forceStop: o.values['force-stop'] === true,
+    forcePath: o.values['force-path'] === true,
     record,
     treeSource: TREE_SOURCE(),
   });
   if (record === undefined) o.stdout(`${t.uninstallNoRecord}\n`);
-  const dir = mkdtempSync(join(tmpdir(), 'studio-relay-uninstall-'));
-  const file = join(dir, 'uninstall.ps1');
-  writeFileSync(file, script);
-  let r: Awaited<ReturnType<Exec>>;
-  try {
-    r = await exec(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file],
-      { onOutput: o.stdout },
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const r = await runScript(exec, script, o.stdout);
   if (r.code !== 0) {
     o.stderr(`${t.uninstallStopped}\n`);
     return 1;

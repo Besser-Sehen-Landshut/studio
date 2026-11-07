@@ -89,13 +89,13 @@ export const COMMANDS: HelpEntry[] = [
   },
   {
     usage:
-      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--i-am-local] [--force-stop] [--dry-run]',
+      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--block-smb-lan] [--i-am-local] [--force-stop] [--dry-run]',
     about:
       'On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead',
   },
   {
     usage:
-      'relay uninstall [--keep-tree] [--force-stop] [--user <name>] [--home <dir>] [--i-am-local] [--dry-run]',
+      'relay uninstall [--keep-tree] [--force-stop] [--force-path] [--user <name>] [--home <dir>] [--i-am-local] [--dry-run]',
     about:
       'On a Windows worker, elevated: remove everything relay install made, every lead first; run again to finish',
   },

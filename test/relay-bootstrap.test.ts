@@ -103,7 +103,8 @@ describe('the bootstrap template', () => {
     expect(template).toContain("$nodeExe = Join-Path $env:ProgramFiles 'nodejs\\node.exe'");
     expect(template).toContain("[Environment]::GetEnvironmentVariable('Path', 'Machine') }");
     expect(template).not.toContain("GetEnvironmentVariable('Path', 'User')");
-    expect(template).toContain('Remove-Item -LiteralPath $work -Recurse -Force');
+    expect(template).toContain('[IO.Directory]::Delete($work, $true)');
+    expect(template).not.toMatch(/-Recurse/);
   });
 });
 
