@@ -28,6 +28,7 @@ import {
 } from './config.js';
 import { type RunUsage, recordLedgerRun, withItemUsage } from './costs.js';
 import { pickCrewCredential } from './crew.js';
+import { TREE_SOURCE } from './crew-accounts.js';
 import { startEgressProxy } from './egress-proxy.js';
 import { HeldError } from './held.js';
 import { activeParks, blockHold, parkUntil, readLimits, writeLimits } from './limits.js';
@@ -84,6 +85,7 @@ import {
   relayCall,
   sshTransport,
 } from './relay-transport.js';
+import { readInstallRecord, relayUninstallScript } from './relay-uninstall.js';
 import {
   authorizedKeysFile,
   authorizedKeysScript,
@@ -790,6 +792,9 @@ export async function runRelayCommand(o: {
         setupScriptFor({ owner: o.owner, env: o.env, home, machine, relayUser, install: i }),
     });
   }
+  if (sub === 'uninstall' && args.length === 0) {
+    return await uninstall({ ...o, home: o.values.home, machine, relayUser: o.values.user });
+  }
   if (sub === 'unpair' && args.length === 1) {
     return await unpair({ ...o, home, machine, relayUser, label: args[0] as string });
   }
@@ -811,6 +816,7 @@ export interface RelayValues {
   'i-am-local'?: boolean;
   'force-stop'?: boolean;
   'disable-spooler'?: boolean;
+  'keep-tree'?: boolean;
   pair?: string;
   user?: string;
   port?: string;
@@ -1076,6 +1082,83 @@ async function install(o: {
     hostKey === undefined
       ? 'host key: cannot read the OpenSSH server host key\n'
       : `host key fingerprint: ${keyFingerprint(hostKey)}${o.pair === undefined ? '' : `\nOn the lead, within the hour: studio relay pair ${o.pair.label} --connect`}\n`,
+  );
+  return 0;
+}
+
+/**
+ * `studio relay uninstall` on the worker, elevated and at the machine (it stops sshd and removes
+ * the account a lead logs in as). Names come from the install record, else from the flags and the
+ * worker's config; the script (src/relay-uninstall.ts) does the rest.
+ */
+async function uninstall(o: {
+  home: string | undefined;
+  machine: string;
+  relayUser: string | undefined;
+  values: RelayValues;
+  owner: OwnerEnv;
+  env: Record<string, string | undefined>;
+  stdout: (s: string) => void;
+  stderr: (s: string) => void;
+  platform?: WorkerPlatform;
+  exec?: Exec;
+  elevated?: () => Promise<boolean | undefined>;
+}): Promise<number> {
+  const exec = o.exec ?? systemExec;
+  await windowsAdmin({ ...o, what: 'uninstall' });
+  if (o.values['i-am-local'] !== true && (sshSessionVar(o.env) || (await underSshd(exec)))) {
+    throw new Error(
+      'relay uninstall stops sshd and removes the account the lead logs in as: run it at the machine or over remote desktop, never over SSH (--i-am-local if this is not an SSH session)',
+    );
+  }
+  const record = readInstallRecord(o.machine);
+  let settings: ReturnType<typeof serveSettings> | undefined;
+  try {
+    settings = serveSettings(relayOwner(o.owner, o.home ?? relayHomeDefault(o.env), o.machine));
+  } catch {
+    settings = undefined;
+  }
+  const leads = Object.keys(readPairings(o.machine));
+  const script = relayUninstallScript({
+    relayUser: o.relayUser ?? record?.relayUser ?? 'studio-relay',
+    crewPrefix: record?.crewPrefix ?? settings?.windows?.crewUser ?? 'studio-crew',
+    task: record?.task ?? settings?.windows?.broker ?? 'Studio relay broker',
+    home: o.home ?? record?.home ?? relayHomeDefault(o.env),
+    machine: o.machine,
+    readPaths: record?.readPaths ?? [],
+    keepTree: o.values['keep-tree'] === true,
+    forceStop: o.values['force-stop'] === true,
+    record,
+    treeSource: TREE_SOURCE(),
+  });
+  if (record === undefined) {
+    o.stdout(
+      'No install record here (an install of an earlier version): services Studio stopped stay as they are.\n',
+    );
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'studio-relay-uninstall-'));
+  const file = join(dir, 'uninstall.ps1');
+  writeFileSync(file, script);
+  let r: Awaited<ReturnType<Exec>>;
+  try {
+    r = await exec(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file],
+      { onOutput: o.stdout },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  if (r.code !== 0) {
+    o.stderr(
+      'studio: relay uninstall stopped; fix what it says and run studio relay uninstall again (it goes on where it stopped)\n',
+    );
+    return 1;
+  }
+  o.stdout(
+    leads.length === 0
+      ? 'Done. Next: on the lead, remove this worker from workers.relay in the owner config.\n'
+      : `Done. Next: on each lead, remove ${leads.map((l) => `workers.relay.${l}`).join(', ')} from the owner config.\n`,
   );
   return 0;
 }

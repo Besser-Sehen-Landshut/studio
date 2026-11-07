@@ -443,7 +443,8 @@ describe('the install script', () => {
       tail.indexOf('-ExitCode -ne 0'),
     );
     expect(tail).not.toContain('Restart-Service sshd');
-    expect(tail).not.toContain('Spooler');
+    // The spooler's state is only read (for uninstall), never changed without --disable-spooler.
+    expect(tail).not.toMatch(/(Stop|Set)-Service -Name Spooler/);
     const kept = relaySetupScript({
       ...base,
       install: { port: 22, scope: { tailscale: true }, keepPasswords: true, disableSpooler: true },

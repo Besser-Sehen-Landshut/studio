@@ -438,7 +438,7 @@ $claude = ${psQuote(join(machineConfig(o.machine), 'studio', 'claude'))}
 foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
   if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }`;
-  return `${o.install === undefined ? '' : installHead(o.install, o.relayUser, o.crewPrefix)}#Requires -RunAsAdministrator
+  return `${PRIOR_CAPTURE(o.machine)}${o.install === undefined ? '' : installHead(o.install, o.relayUser, o.crewPrefix)}#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
@@ -533,7 +533,8 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Stop-Service -Name WebClient -Force -ErrorAction SilentlyContinue
   Set-Service -Name WebClient -StartupType Disabled
 }
-# The pinned plugins in the crew Claude config dir of the relay home.
+# What this machine had before, and what the install did: studio relay uninstall reads it.
+${recordSnippet({ machine: o.machine, spoolerDisabled: o.install?.disableSpooler === true })}# The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
 ${o.install === undefined ? setupTail(block) : installTail(block, o.install)}`;
 }
@@ -584,6 +585,86 @@ ${adminFileSnippet({ file: o.file, lines: o.lines, readers: 'relay' })}
  * sshd stopped and every inbound rule for it off. Then the prerequisites: Git and Claude Code
  * through winget (for the whole machine), the OpenSSH server as the Windows capability it is.
  */
+/**
+ * PowerShell functions that find and stop every process of the relay account and of the crew
+ * users: `RelayProcesses`, and `NoRelayJob`, which refuses while one runs unless `forceStop`.
+ * Install and uninstall run them before they touch anything a job could use.
+ */
+export const relayJobFunctions = (o: {
+  relayUser: string;
+  crewPrefix: string;
+  forceStop: boolean;
+  what: string;
+}): string => `$forceStop = ${o.forceStop ? '$true' : '$false'}
+function RelayProcesses {
+  $crewRe = '^' + [regex]::Escape(${psQuote(o.crewPrefix)}) + '-[0-9a-f]{6}$'
+  $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(o.relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
+  if ($sids.Count -eq 0) { return @() }
+  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
+}
+function NoRelayJob {
+  $running = RelayProcesses
+  if ($running.Count -eq 0) { return }
+  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user): let it end, or run studio relay ${o.what} --force-stop" }
+  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
+  for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
+    foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+    $running = RelayProcesses
+  }
+  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
+}
+`;
+
+/** The file in the admin-only tree where the install records what it found and what it did. */
+export const installRecordFile = (machine: string): string => join(machine, 'install-record.json');
+
+/**
+ * PowerShell that notes what the machine had before Studio changed anything, for
+ * `studio relay uninstall`: the services Studio stops or starts and the rule OpenSSH adds. Runs
+ * first, before anything else of the setup. `$priorMachine` says whether the admin-only tree was
+ * there already (an install of an earlier version, which recorded nothing).
+ */
+const PRIOR_CAPTURE = (
+  machine: string,
+) => `# What this machine had before Studio changed it: the first install records it for uninstall.
+function ServiceState([string]$name) {
+  $s = Get-Service -Name $name -ErrorAction SilentlyContinue
+  if ($null -eq $s) { return @{ exists = $false } }
+  @{ exists = $true; start = [string]$s.StartType; status = [string]$s.Status }
+}
+$priorWebClient = ServiceState 'WebClient'
+$priorSpooler = ServiceState 'Spooler'
+$priorSshd = ServiceState 'sshd'
+$priorRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+$priorSshdRule = if ($null -eq $priorRule) { @{ exists = $false } } else { @{ exists = $true; enabled = [string]$priorRule.Enabled } }
+$priorSshdCapability = $null
+$priorMachine = Test-Path -LiteralPath ${psQuote(machine)}
+`;
+
+/**
+ * PowerShell that writes the install record (admin-only, nobody else reads it). The state before
+ * Studio comes from the first install and is kept by every later one; an admin-only tree an
+ * earlier version made without a record leaves it unknown, and uninstall then restores nothing.
+ */
+const recordSnippet = (o: {
+  machine: string;
+  spoolerDisabled: boolean;
+}) => `$recordFile = ${psQuote(installRecordFile(o.machine))}
+$old = $null
+if (Test-Path -LiteralPath $recordFile) { try { $old = Get-Content -Raw -LiteralPath $recordFile | ConvertFrom-Json } catch { $old = $null } }
+if ($null -ne $old) { $prior = $old.prior }
+elseif ($priorMachine) { $prior = $null }
+else { $prior = @{ webClient = $priorWebClient; spooler = $priorSpooler; sshd = $priorSshd; sshdRule = $priorSshdRule; sshdCapability = $priorSshdCapability } }
+$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o.spoolerDisabled ? '$true' : '$false'} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); prior = $prior }
+$tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+[IO.File]::WriteAllText($tmp, (ConvertTo-Json -Compress -Depth 6 $record), (New-Object Text.ASCIIEncoding))
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $recordFile" }
+if (Test-Path -LiteralPath $recordFile) { [IO.File]::Replace($tmp, $recordFile, [NullString]::Value) } else { [IO.File]::Move($tmp, $recordFile) }
+icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+`;
+
 const installHead = (
   i: RelayInstall,
   relayUser: string,
@@ -597,26 +678,7 @@ function SshdOff {
 }
 # No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
 # could plant a link between the two. Every process of the relay account or a crew user counts.
-$forceStop = ${i.forceStop === true ? '$true' : '$false'}
-function RelayProcesses {
-  $crewRe = '^' + [regex]::Escape(${psQuote(crewPrefix)}) + '-[0-9a-f]{6}$'
-  $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
-  if ($sids.Count -eq 0) { return @() }
-  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
-}
-function NoRelayJob {
-  $running = RelayProcesses
-  if ($running.Count -eq 0) { return }
-  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user): let it end, or run this again with --force-stop" }
-  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
-  for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
-    foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
-    Start-Sleep -Milliseconds 500
-    $running = RelayProcesses
-  }
-  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
-}
-# Before sshd stops: a running job is refused while the lead can still reach it.
+${relayJobFunctions({ relayUser, crewPrefix, forceStop: i.forceStop === true, what: 'install' })}# Before sshd stops: a running job is refused while the lead can still reach it.
 NoRelayJob
 try {
 function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
@@ -632,6 +694,7 @@ Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
+$priorSshdCapability = @{ name = [string]$ssh.Name; state = [string]$ssh.State }
 if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
 SshdOff
 # With sshd off no new job starts: once more, for one that started in between.

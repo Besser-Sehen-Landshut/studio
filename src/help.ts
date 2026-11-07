@@ -94,6 +94,12 @@ export const COMMANDS: HelpEntry[] = [
       'On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead',
   },
   {
+    usage:
+      'relay uninstall [--keep-tree] [--force-stop] [--user <name>] [--home <dir>] [--i-am-local]',
+    about:
+      'On a Windows worker, elevated: remove everything relay install made, every lead first; run again to finish',
+  },
+  {
     usage: 'relay unpair <label> [--home <dir>]',
     about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key",
   },

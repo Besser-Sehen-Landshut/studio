@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { crewAccountScript } from '../src/crew-accounts.js';
 import { relayHandoffScript } from '../src/relay-serve.js';
+import { relayUninstallScript } from '../src/relay-uninstall.js';
 import {
   authorizedKeysScript,
   brokerScript,
@@ -68,6 +69,18 @@ const scripts: Record<string, string> = {
     machine: 'C:\\Program Files\\Studio\\relay',
   }),
   'folder functions': FOLDER_FUNCTIONS,
+  uninstall: relayUninstallScript({
+    relayUser: 'studio-relay',
+    crewPrefix: 'studio-crew',
+    task: 'Studio relay broker',
+    home: 'C:\\ProgramData\\Studio\\relay',
+    machine: 'C:\\Program Files\\Studio\\relay',
+    readPaths: [],
+    keepTree: false,
+    forceStop: false,
+    record: undefined,
+    treeSource: 'C:\\plugins\\studio\\bin\\studio-tree.cs',
+  }),
   'sshd block': sshdMatchBlock({
     relayUser: 'studio-relay',
     machine: 'C:\\Program Files\\Studio\\relay',
