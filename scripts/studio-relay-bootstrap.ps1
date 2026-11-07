@@ -203,7 +203,7 @@ try {
     }
     $digest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text.ToString()))).Replace('-', '')
     if ($digest -ne $Tree) { Fail "the bundle is not the Studio $version of the lead (tree digest $digest, the lead expects $Tree): nothing was run" 'update Studio on the lead or use the release of its version; if this repeats, do not use this network' }
-    Write-Output "    ok: tree digest $digest, as the lead's Studio $version
+    Write-Output "    ok: tree digest $digest, as the lead's Studio $version"
   }
 
   $args2 = if ($Uninstall) { @('relay', 'uninstall') + @($Rest) } else { @('relay', 'install', '--pair', $Pair) + @($Rest) }
