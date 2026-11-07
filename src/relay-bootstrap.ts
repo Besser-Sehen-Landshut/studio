@@ -111,7 +111,7 @@ export function bootstrapCommand(
   anchor = leadAnchor(),
   version = STUDIO_VERSION,
   repo = STUDIO_REPOSITORY,
-  /** Where the bootstrap lies; the release by default (tests give a file URL). */
+  /** Where the bootstrap lies; the release by default (tests serve it on loopback). */
   url = `https://github.com/${repo}/releases/download/v${version}/studio-relay-bootstrap.ps1`,
 ): string {
   const args = 'pair' in o ? `-Pair '${o.pair}'` : '-Uninstall';
