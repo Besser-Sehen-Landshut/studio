@@ -53,6 +53,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # The release tags: the bootstrap test builds the assets of one.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v6.1.0
       - uses: actions/setup-node@v7
         with:
@@ -60,7 +63,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Windows crew sandbox
-        run: pnpm exec vitest run --no-file-parallelism test/egress-proxy.test.ts test/windows-sandbox.test.ts test/windows-real.test.ts test/relay-windows-real.test.ts test/relay-uninstall.test.ts test/relay-lockdown.test.ts
+        run: pnpm exec vitest run --no-file-parallelism test/egress-proxy.test.ts test/windows-sandbox.test.ts test/windows-real.test.ts test/relay-windows-real.test.ts test/relay-uninstall.test.ts test/relay-lockdown.test.ts test/relay-bootstrap.test.ts
         env:
           STUDIO_WINDOWS_SANDBOX_TEST: "1"
 

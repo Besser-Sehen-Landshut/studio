@@ -209,14 +209,16 @@ describe('README relay workers', () => {
     }
     expect(readme).toContain('| `relay unpair <label> [--home <dir>]`');
   });
-  it('sets up a Windows relay worker in five steps, with a troubleshooting table', () => {
+  it('sets up a Windows relay worker in four steps, the PC in one line, with a troubleshooting table', () => {
     const at = readme.indexOf('### Set up a Windows relay worker in 10 minutes');
     expect(at).toBeGreaterThan(0);
     const s = readme.slice(at, readme.indexOf('\n## ', at));
     const steps = [...s.matchAll(/^(\d)\. \*\*/gm)].map((m) => m[1]);
-    expect(steps).toEqual(['1', '2', '3', '4', '5']);
+    expect(steps).toEqual(['1', '2', '3', '4']);
     for (const phrase of [
       'studio relay pair lab worker.example',
+      'studio-relay-bootstrap.ps1',
+      '-Pair ',
       'studio relay install --pair',
       'studio relay pair lab --connect',
       'host key fingerprint',

@@ -29069,6 +29069,7 @@ var import_yaml2 = __toESM(require_dist(), 1);
 import { existsSync, lstatSync, readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
 import { join as join2 } from "node:path";
 var STUDIO_VERSION = "0.26.1";
+var STUDIO_REPOSITORY = "Besser-Sehen-Landshut/studio";
 var HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 var PLUGIN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -29098,7 +29099,7 @@ var DEFAULT_PLUGINS = [
   {
     name: "studio@studio-marketplace",
     version: STUDIO_VERSION,
-    marketplace: "https://github.com/Besser-Sehen-Landshut/studio.git"
+    marketplace: `https://github.com/${STUDIO_REPOSITORY}.git`
   }
 ];
 function pinnedPlugins(configured = [], allowed = []) {
@@ -66204,7 +66205,7 @@ async function uninstall(o2) {
   const inside = (p) => p.toLowerCase().startsWith(`${top}\\`) || p.toLowerCase().startsWith(`${top}/`);
   if (o2.values["keep-tree"] !== true && (inside(process.execPath) || inside(STUDIO_BIN))) {
     throw new Error(
-      `relay uninstall cannot remove ${o2.machine} while it runs from there: run it from another copy of Studio, or keep the tree with --keep-tree`
+      `relay uninstall cannot remove ${o2.machine} while it runs from there: run it from another copy of Studio (the bootstrap line with -Uninstall instead of -Pair), or keep the tree with --keep-tree`
     );
   }
   const record2 = readInstallRecord(o2.machine);
@@ -66270,6 +66271,7 @@ async function unpair(o2) {
 `);
   return await syncAuthorizedKeys({ ...o2, exec: o2.exec ?? systemExec }) ? 0 : 1;
 }
+var bootstrapCommand = (line4, version2 = STUDIO_VERSION) => `& ([scriptblock]::Create((irm https://github.com/${STUDIO_REPOSITORY}/releases/download/v${version2}/studio-relay-bootstrap.ps1))) -Pair '${line4}'`;
 async function pairStart(o2) {
   if (!WORKER_LABEL_RE.test(o2.label)) {
     throw new Error("relay pair: a label is ^[a-z][a-z0-9-]{0,31}$");
@@ -66307,9 +66309,12 @@ async function pairStart(o2) {
     identityFile: key,
     createdAt: o2.ports.clock.now().toISOString()
   });
+  const line4 = renderPairLine({ label: o2.label, secret, key: pub });
   o2.stdout(
-    `On the worker, in an elevated PowerShell, within the hour:
-  studio relay install --pair "${renderPairLine({ label: o2.label, secret, key: pub })}"
+    `On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH), within the hour:
+  ${bootstrapCommand(line4)}
+It installs Node.js and Git if missing (it asks first), Studio ${STUDIO_VERSION} and the relay worker.
+With Studio there already: studio relay install --pair "${line4}"
 Then here: studio relay pair ${o2.label} --connect
 The line holds a single-use secret: paste it on the worker only.
 `

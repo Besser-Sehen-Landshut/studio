@@ -1,0 +1,52 @@
+name: release
+
+# Attaches the assets of a published release: the bundle of its tag and the one-step setup of a
+# Windows relay worker with that bundle's SHA-256 written in (scripts/release-assets.mjs), and adds
+# both hashes to the release notes. Runs on GitHub-hosted runners only, as all of Studio's CI.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag (vX.Y.Z) to attach the assets to
+        required: true
+
+# Its own group per tag: `ci-<ref>` would share `ci-main` with the push CI when run by hand, and a
+# half-attached release is never cancelled.
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  assets:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Build the assets
+        run: node scripts/release-assets.mjs --tag "$TAG" --repo "$GITHUB_REPOSITORY" --out "$RUNNER_TEMP/assets"
+      - name: Attach them and add their hashes to the notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP/assets"
+          gh release upload "$TAG" "studio-${TAG#v}.zip" studio-relay-bootstrap.ps1 SHA256SUMS --clobber -R "$GITHUB_REPOSITORY"
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body --jq .body > body.md
+          # Once: a run again (workflow_dispatch) replaces the files, the section stays one.
+          if ! grep -q '^### Windows relay worker in one line' body.md; then
+            cat notes.md >> body.md
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file body.md
+          fi

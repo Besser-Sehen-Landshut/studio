@@ -5,6 +5,8 @@ import { z } from 'zod';
 
 /** This plugin's own version; a test keeps it equal to package.json and plugin.json. */
 export const STUDIO_VERSION = '0.26.1';
+/** The repository Studio is released from (its releases carry the relay worker's bootstrap). */
+export const STUDIO_REPOSITORY = 'Besser-Sehen-Landshut/studio';
 
 const HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 
@@ -52,7 +54,7 @@ export const DEFAULT_PLUGINS: readonly PluginPin[] = [
   {
     name: 'studio@studio-marketplace',
     version: STUDIO_VERSION,
-    marketplace: 'https://github.com/Besser-Sehen-Landshut/studio.git',
+    marketplace: `https://github.com/${STUDIO_REPOSITORY}.git`,
   },
 ];
 
