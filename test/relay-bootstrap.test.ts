@@ -1,9 +1,13 @@
-// The one-step setup of a Windows relay worker: the release assets (bundle, bootstrap with the
-// bundle's SHA-256 written in), the release workflow that attaches them, the command `relay pair`
-// prints, and on the elevated windows-latest job the bootstrap itself.
+// The one-step setup of a Windows relay worker and its trust anchor: the release assets (bundle of
+// the runtime paths, bootstrap with only the version and the repository filled in), the values the
+// lead computes from its own Studio (the bootstrap's SHA-256, the tree digest), the line `relay
+// pair` prints, the release workflow, and on the elevated windows-latest job the one-liner and the
+// bootstrap itself.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  cpSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -13,10 +17,17 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { STUDIO_REPOSITORY, STUDIO_VERSION } from '../src/plugins.js';
-import { bootstrapCommand } from '../src/relay-command.js';
+import {
+  BUNDLE_PATHS,
+  bootstrapCommand,
+  fillBootstrap,
+  leadAnchor,
+  treeDigest,
+} from '../src/relay-bootstrap.js';
 import { powershellEnv } from '../src/windows-sandbox.js';
 
 const repoRoot = join(import.meta.dirname, '..');
@@ -24,29 +35,21 @@ const work = realpathSync(mkdtempSync(join(tmpdir(), 'studio-bootstrap-')));
 afterAll(() => rmSync(work, { recursive: true, force: true }));
 
 const template = readFileSync(join(repoRoot, 'scripts', 'studio-relay-bootstrap.ps1'), 'utf8');
-/** A released tag that this checkout has (CI fetches all of them). */
-const tag = (() => {
-  try {
-    return execFileSync('git', ['tag', '--list', 'v*.*.*', '--sort=-v:refname'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    })
-      .split('\n')
-      .find((t) => /^v\d+\.\d+\.\d+$/.test(t));
-  } catch {
-    return undefined;
-  }
-})();
+const sha = (data: Buffer | string) =>
+  createHash('sha256').update(data).digest('hex').toUpperCase();
 
+/** The assets of HEAD under a made-up version, as the release workflow builds them for a tag. */
+const VERSION = '9.9.9';
 const assets = (() => {
-  if (tag === undefined) return undefined;
   const out = join(work, 'assets');
   execFileSync(
     process.execPath,
     [
       join(repoRoot, 'scripts', 'release-assets.mjs'),
       '--tag',
-      tag,
+      `v${VERSION}`,
+      '--commit',
+      'HEAD',
       '--repo',
       'owner/name',
       '--out',
@@ -54,104 +57,118 @@ const assets = (() => {
     ],
     { cwd: repoRoot },
   );
-  const version = tag.slice(1);
+  const zip = join(out, `studio-${VERSION}.zip`);
+  const unpacked = join(work, 'unpacked');
+  mkdirSync(unpacked);
+  // bsdtar (Windows) reads a zip; elsewhere unzip.
+  if (process.platform === 'win32') execFileSync('tar', ['-xf', zip, '-C', unpacked]);
+  else execFileSync('unzip', ['-q', zip, '-d', unpacked]);
   return {
     out,
-    version,
-    zip: join(out, `studio-${version}.zip`),
+    zip,
+    unpacked: join(unpacked, 'studio'),
     bootstrap: join(out, 'studio-relay-bootstrap.ps1'),
+    tree: readFileSync(join(out, 'tree-digest.txt'), 'utf8').trim(),
   };
 })();
 
-const sha = (file: string) =>
-  createHash('sha256').update(readFileSync(file)).digest('hex').toUpperCase();
-
 describe('the bootstrap template', () => {
-  it('is ASCII and refuses to run as the template', () => {
+  it('is ASCII, refuses to run as the template, and names exactly the bundle paths', () => {
     expect(template).toMatch(/^[\t\n\r -~]*$/);
     expect(template).toContain("if ($version -like '__*') { Fail 'this is the template");
+    const listed = /\$bundlePaths = @\(([^)]*)\)/.exec(template)?.[1] ?? '';
+    expect(listed.split(', ').map((x) => x.replace(/'/g, ''))).toEqual([...BUNDLE_PATHS]);
+    const script = readFileSync(join(repoRoot, 'scripts', 'release-assets.mjs'), 'utf8');
+    for (const p of BUNDLE_PATHS) expect(script).toContain(`'${p}',`);
+    // Nothing of the bundle is written into the released script: the lead's values decide.
+    expect(template).not.toMatch(/__STUDIO_BUNDLE_SHA256__|\$sha256/);
   });
 
-  it('checks the SHA-256 before it unpacks or runs anything, and asks before winget', () => {
-    const check = template.indexOf('if ($got -ne $sha256)');
-    expect(check).toBeGreaterThan(0);
-    expect(template.indexOf('New-Object IO.Compression.ZipArchive($fs')).toBeGreaterThan(check);
-    expect(template.indexOf('& $nodeExe $studio')).toBeGreaterThan(check);
-    expect(template.indexOf('Read-Host')).toBeLessThan(
-      template.indexOf('winget install --id $id --exact --silent'),
+  it('checks every zip entry before unpacking any, then the tree digest before running anything', () => {
+    const checks = template.indexOf(
+      'foreach ($e in $archive.Entries) {\n        $n = [string]$e.FullName',
     );
-    // Never over SSH, by the environment and by an sshd among the parents.
-    expect(template).toContain('$env:SSH_CONNECTION');
-    expect(template).toContain("$x.Name -like 'sshd*'");
-    expect(template).toContain("'relay', 'install', '--pair', $Pair");
+    const unpack = template.indexOf('$out = [IO.File]::Open($dest, [IO.FileMode]::CreateNew');
+    const digest = template.indexOf('if ($digest -ne $Tree)');
+    expect(checks).toBeGreaterThan(0);
+    expect(unpack).toBeGreaterThan(checks);
+    expect(digest).toBeGreaterThan(unpack);
+    expect(template.indexOf('& $nodeExe $studio')).toBeGreaterThan(digest);
+    for (const rule of [
+      "$n.StartsWith('studio/', [StringComparison]::Ordinal)",
+      "$n.Contains('\\') -or $n.Contains(':') -or ($parts -contains '..') -or ($parts -contains '.') -or ($parts -contains '')",
+      '-not ($bundlePaths -ccontains $parts[0])',
+      'if ($mode -eq 0xA000)',
+      "New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)",
+      '[Array]::Sort($sorted, [StringComparer]::Ordinal)',
+    ]) {
+      expect(template, rule).toContain(rule);
+    }
+    expect(template).toContain("if (-not $DryRun -and $Tree -notmatch '^[0-9A-Fa-f]{64}$')");
   });
 
-  it('stages in an admin-only folder made before the download, never in TEMP, and holds the bundle from hash to unpack', () => {
+  it('stages in an admin-only folder made before the download, never in TEMP; asks before winget; never over SSH', () => {
     expect(template).not.toMatch(/\$env:TEMP|\$env:TMP/i);
     const made = template.indexOf('[IO.Directory]::CreateDirectory($work, $acl)');
     expect(made).toBeGreaterThan(template.indexOf('$acl.SetAccessRuleProtection($true, $false)'));
     expect(made).toBeLessThan(template.indexOf('Invoke-WebRequest'));
-    expect(made).toBeLessThan(template.indexOf('Copy-Item -LiteralPath $Bundle'));
-    expect(template).toContain("$work = Join-Path $env:ProgramData ('studio-bootstrap-'");
-    // Read sharing only, one handle for the hash and the unpacking, closed only after both.
-    const open = template.indexOf('[IO.FileShare]::Read)');
-    expect(open).toBeGreaterThan(0);
-    expect(template.indexOf('ComputeHash($fs)')).toBeGreaterThan(open);
+    expect(template.indexOf('[IO.FileShare]::Read)')).toBeLessThan(
+      template.indexOf('ComputeHash($fs)'),
+    );
     expect(template.indexOf('$fs.Dispose()')).toBeGreaterThan(template.indexOf('$in.CopyTo($out)'));
-    expect(template).toContain('names a path outside its folder');
-    // Node.js and Git from Program Files, PATH from the machine only; the staging folder goes.
     expect(template).toContain("$nodeExe = Join-Path $env:ProgramFiles 'nodejs\\node.exe'");
-    expect(template).toContain("[Environment]::GetEnvironmentVariable('Path', 'Machine') }");
     expect(template).not.toContain("GetEnvironmentVariable('Path', 'User')");
     expect(template).toContain('[IO.Directory]::Delete($work, $true)');
     expect(template).not.toMatch(/-Recurse/);
+    expect(template.indexOf('Read-Host')).toBeLessThan(
+      template.indexOf('winget install --id $id --exact --silent'),
+    );
+    expect(template).toContain("$x.Name -like 'sshd*'");
   });
 });
 
-describe.skipIf(assets === undefined)('the release assets', () => {
-  const a = assets as NonNullable<typeof assets>;
-  it('write the version, the bundle SHA-256 and the repository into the bootstrap', () => {
-    const b = readFileSync(a.bootstrap, 'utf8');
-    expect(b).toContain(`$version = '${a.version}'`);
-    expect(b).toContain(`$sha256 = '${sha(a.zip)}'`);
+describe('the release assets and the lead agree, from separate sources', () => {
+  it('the released bootstrap is the template with version and repository, the bytes the lead computes', () => {
+    const b = readFileSync(assets.bootstrap, 'utf8');
+    expect(b).toContain(`$version = '${VERSION}'`);
     expect(b).toContain("$repo = 'owner/name'");
     expect(b).not.toMatch(/__STUDIO_/);
-    expect(b).toContain('\r\n');
-    const sums = readFileSync(join(a.out, 'SHA256SUMS'), 'utf8');
-    expect(sums).toContain(`${sha(a.zip).toLowerCase()}  studio-${a.version}.zip`);
-    expect(sums).toContain(`${sha(a.bootstrap).toLowerCase()}  studio-relay-bootstrap.ps1`);
-    const notes = readFileSync(join(a.out, 'notes.md'), 'utf8');
-    expect(notes).toContain(sha(a.bootstrap));
-    expect(notes).toContain(`releases/download/${tag}/studio-relay-bootstrap.ps1`);
+    expect(b).toBe(fillBootstrap(template, VERSION, 'owner/name'));
+    const lead = leadAnchor(repoRoot, VERSION, 'owner/name');
+    expect(sha(readFileSync(assets.bootstrap))).toBe(lead.bootstrapSha);
+    const notes = readFileSync(join(assets.out, 'notes.md'), 'utf8');
+    expect(notes).toContain(lead.bootstrapSha);
+    expect(notes).toContain('is not trusted');
   });
 
-  it('bundle the plugin as the install copies it, without tests or workflows', () => {
-    const list = execFileSync(
-      'git',
-      ['archive', '--format=tar', tag as string, '--', '.', ':(exclude)test', ':(exclude).github'],
-      {
-        cwd: repoRoot,
-        maxBuffer: 256 * 1024 * 1024,
-      },
+  it("the bundle holds exactly the runtime paths; its tree digest is the lead's, whatever else the lead has", () => {
+    const top = readdirSync(assets.unpacked).sort();
+    expect(top).toEqual([...BUNDLE_PATHS].sort());
+    expect(readdirSync(join(assets.unpacked, 'dist-bundle'))).toContain('studio.mjs');
+    expect(treeDigest(assets.unpacked)).toBe(assets.tree);
+    // The lead's Studio (this checkout, with src/, test/, node_modules beside the runtime paths). A
+    // Windows checkout converts line ends, and the lead never runs on native Windows.
+    if (process.platform !== 'win32') expect(leadAnchor(repoRoot).tree).toBe(assets.tree);
+    // One changed byte anywhere in a runtime path is another digest.
+    const changed = join(work, 'changed');
+    cpSync(assets.unpacked, changed, { recursive: true });
+    writeFileSync(
+      join(changed, 'package.json'),
+      `${readFileSync(join(changed, 'package.json'), 'utf8')} `,
     );
-    expect(list.length).toBeGreaterThan(0);
-    const names = execFileSync('unzip', ['-Z1', a.zip], {
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    expect(names).toContain('studio/bin/studio\n');
-    expect(names).toContain('studio/dist-bundle/studio.mjs\n');
-    expect(names).toContain('studio/.claude-plugin/plugin.json\n');
-    expect(names).not.toMatch(/^studio\/test\//m);
-    expect(names).not.toMatch(/^studio\/\.github\//m);
-    // The same tag gives the same bytes: the hash a release names is stable.
+    expect(treeDigest(changed)).not.toBe(assets.tree);
+  });
+
+  it('the same commit gives the same bytes', () => {
     const again = join(work, 'again');
     execFileSync(
       process.execPath,
       [
         join(repoRoot, 'scripts', 'release-assets.mjs'),
         '--tag',
-        tag as string,
+        `v${VERSION}`,
+        '--commit',
+        'HEAD',
         '--repo',
         'owner/name',
         '--out',
@@ -159,7 +176,27 @@ describe.skipIf(assets === undefined)('the release assets', () => {
       ],
       { cwd: repoRoot },
     );
-    expect(sha(join(again, `studio-${a.version}.zip`))).toBe(sha(a.zip));
+    expect(sha(readFileSync(join(again, `studio-${VERSION}.zip`)))).toBe(
+      sha(readFileSync(assets.zip)),
+    );
+  });
+});
+
+describe('the line the lead prints', () => {
+  const anchor = { bootstrapSha: 'A'.repeat(64), tree: 'b'.repeat(64) };
+  it('checks the bootstrap by SHA-256 before it runs it, and hands it the tree digest', () => {
+    const c = bootstrapCommand({ pair: 'studio-pair-1 lab x ssh-ed25519 AAAA' }, anchor);
+    expect(c).toContain(
+      `DownloadData('https://github.com/${STUDIO_REPOSITORY}/releases/download/v${STUDIO_VERSION}/studio-relay-bootstrap.ps1')`,
+    );
+    expect(c).toContain(
+      `[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-', '') -ne '${anchor.bootstrapSha}'`,
+    );
+    expect(c.indexOf('ComputeHash($b)')).toBeLessThan(c.indexOf('[ScriptBlock]::Create'));
+    expect(c).toContain(`-Pair 'studio-pair-1 lab x ssh-ed25519 AAAA' -Tree '${anchor.tree}'`);
+    expect(bootstrapCommand({ uninstall: true }, anchor)).toContain(
+      `-Uninstall -Tree '${anchor.tree}'`,
+    );
   });
 });
 
@@ -177,89 +214,156 @@ describe('the release workflow', () => {
       .join('\n');
     expect(run).toContain('node scripts/release-assets.mjs --tag "$TAG"');
     expect(run).toContain('studio-relay-bootstrap.ps1 SHA256SUMS --clobber');
-    // Never cancelled half-way, and never in the group of the push CI.
     expect(wf.concurrency['cancel-in-progress']).toBe(false);
     expect(wf.concurrency.group).toMatch(/^release-/);
   });
 });
 
-describe('relay pair prints the one line for the PC', () => {
-  it('names the bootstrap of this very version and passes the line in single quotes', () => {
-    const c = bootstrapCommand('studio-pair-1 lab x ssh-ed25519 AAAA');
-    expect(c).toBe(
-      `& ([scriptblock]::Create((irm https://github.com/${STUDIO_REPOSITORY}/releases/download/v${STUDIO_VERSION}/studio-relay-bootstrap.ps1))) -Pair 'studio-pair-1 lab x ssh-ed25519 AAAA'`,
-    );
-  });
-});
-
-// Elevated, on the windows-latest job: the bootstrap as released, without installing anything.
+// Elevated, on the windows-latest job: the one-liner and the bootstrap as released, without
+// installing anything.
 const elevated = process.platform === 'win32' && process.env.STUDIO_WINDOWS_SANDBOX_TEST === '1';
 
-describe.skipIf(!elevated || assets === undefined)('the bootstrap on Windows', () => {
-  const a = assets as NonNullable<typeof assets>;
+describe.skipIf(!elevated)('the one-liner and the bootstrap on Windows', () => {
   const env = Object.fromEntries(
     Object.entries(powershellEnv(process.env)).filter(
       ([k]) => k.toLowerCase() !== 'psmodulepath' && !k.startsWith('SSH_'),
     ),
   );
-  const pair = `studio-pair-1 lab ${'a'.repeat(43)} ssh-ed25519 ${'A'.repeat(68)}`;
-  // The runner's Node.js in Program Files is older than 24 (the job's own is elsewhere): a copy of
-  // the bootstrap runs with the job's Node.js and Git, so the later steps are reached.
-  const patched = () => {
-    const file = join(work, 'bootstrap-here.ps1');
-    const git = execFileSync('where.exe', ['git'], { encoding: 'utf8' }).split(
-      /\r?\n/,
-    )[0] as string;
-    writeFileSync(
-      file,
-      readFileSync(a.bootstrap, 'utf8')
-        .replace(/^\$nodeExe = .*$/m, `$nodeExe = '${process.execPath.replace(/'/g, "''")}'`)
-        .replace(/^\$gitExe = .*$/m, `$gitExe = '${git.trim().replace(/'/g, "''")}'`),
-    );
-    return file;
-  };
-  const staged = () =>
-    readdirSync(process.env.ProgramData ?? 'C:\\ProgramData').filter((f) =>
-      f.startsWith('studio-bootstrap-'),
-    );
-  const run = (args: string[], extra: Record<string, string> = {}, file = a.bootstrap) => {
+  const ps = (args: string[], extra: Record<string, string> = {}) => {
     try {
-      const out = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args],
-        { encoding: 'utf8', env: { ...env, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] },
-      );
-      return { code: 0, out };
+      return {
+        code: 0,
+        out: execFileSync('powershell.exe', args, {
+          encoding: 'utf8',
+          env: { ...env, ...extra },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }),
+      };
     } catch (e) {
       const x = e as { status: number; stdout: string; stderr: string };
       return { code: x.status, out: `${x.stdout}${x.stderr}` };
     }
   };
+  const pair = `studio-pair-1 lab ${'a'.repeat(43)} ssh-ed25519 ${'A'.repeat(68)}`;
+
+  it('the one-liner runs the downloaded script only when its SHA-256 is the expected one, upper or lower case', () => {
+    const stub = join(work, 'stub.ps1');
+    const text =
+      '#Requires -RunAsAdministrator\r\n[CmdletBinding()]\r\nparam([string]$Pair, [string]$Tree, [switch]$Uninstall)\r\nWrite-Output "ran pair=$Pair tree=$Tree"\r\n';
+    writeFileSync(stub, text);
+    const url = pathToFileURL(stub).href;
+    const right = { bootstrapSha: sha(text).toLowerCase(), tree: 'c'.repeat(64) };
+    const ok = ps([
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      bootstrapCommand({ pair: 'p' }, right, '1.0.0', 'o/n', url),
+    ]);
+    expect(ok.out).toContain(`ran pair=p tree=${'c'.repeat(64)}`);
+    const wrong = ps([
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      bootstrapCommand(
+        { pair: 'p' },
+        { ...right, bootstrapSha: 'D'.repeat(64) },
+        '1.0.0',
+        'o/n',
+        url,
+      ),
+    ]);
+    expect(wrong.code).not.toBe(0);
+    expect(wrong.out).toContain('nothing was run');
+    expect(wrong.out).not.toContain('ran pair');
+  }, 60_000);
+
+  // The runner's Node.js in Program Files is older than 24: a copy of the released bootstrap runs
+  // with the job's Node.js and Git, so the steps after the checks are reached.
+  const patched = () => {
+    const file = join(work, 'bootstrap-here.ps1');
+    const git = (
+      execFileSync('where.exe', ['git'], { encoding: 'utf8' }).split(/\r?\n/)[0] as string
+    ).trim();
+    writeFileSync(
+      file,
+      readFileSync(assets.bootstrap, 'utf8')
+        .replace(/^\$nodeExe = .*$/m, `$nodeExe = '${process.execPath.replace(/'/g, "''")}'`)
+        .replace(/^\$gitExe = .*$/m, `$gitExe = '${git.replace(/'/g, "''")}'`),
+    );
+    return file;
+  };
+  const bootstrap = (args: string[], extra: Record<string, string> = {}, file = assets.bootstrap) =>
+    ps(
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args],
+      extra,
+    );
+  const staged = () =>
+    readdirSync(process.env.ProgramData ?? 'C:\\ProgramData').filter((f) =>
+      f.startsWith('studio-bootstrap-'),
+    );
+  /** A zip made by PowerShell with these entries (name, and a link's attributes when given). */
+  const zipOf = (name: string, entries: { name: string; link?: boolean }[]) => {
+    const file = join(work, name);
+    const list = entries
+      .map((e) => `@('${e.name.replace(/'/g, "''")}', ${e.link === true ? '$true' : '$false'})`)
+      .join(', ');
+    execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Add-Type -AssemblyName System.IO.Compression
+$fs = [IO.File]::Create('${file}')
+$z = New-Object IO.Compression.ZipArchive($fs, [IO.Compression.ZipArchiveMode]::Create)
+foreach ($e in @(${list})) { $x = $z.CreateEntry($e[0]); if ($e[1]) { $x.ExternalAttributes = [int](0xA1FF -shl 16) }; $w = New-Object IO.StreamWriter($x.Open()); $w.Write('x'); $w.Dispose() }
+$z.Dispose(); $fs.Dispose()`,
+      ],
+      { env },
+    );
+    return file;
+  };
 
   it('a dry run names every step and changes nothing', () => {
-    const r = run(['-Pair', pair, '-DryRun', '--source', 'fd7a::/48']);
+    const r = bootstrap(['-Pair', pair, '-DryRun', '--source', 'fd7a::/48']);
     expect(r.out).toContain('[1/4] Node.js and Git for Windows');
-    expect(r.out).toMatch(/(ok|would install): Node\.js/);
-    expect(r.out).toContain(
-      `would download https://github.com/owner/name/releases/download/v${a.version}/studio-${a.version}.zip`,
-    );
-    expect(r.out).toContain('would run: studio relay install --pair <line> --source fd7a::/48');
+    expect(r.out).toContain("check its tree digest against the lead's");
     expect(r.out).not.toContain(pair);
     expect(r.code).toBe(0);
   }, 120_000);
 
-  it('refuses a bundle with another SHA-256, a line that is none, and an SSH session', () => {
-    const other = join(work, 'other.zip');
-    writeFileSync(other, 'not the bundle');
+  it("refuses unsafe entries before unpacking any, and a bundle that is not the lead's Studio; the staging folder goes", () => {
     const before = staged().length;
-    const bad = run(['-Pair', pair, '-Bundle', other], {}, patched());
-    expect(bad.code).not.toBe(0);
-    expect(bad.out).toContain('nothing was installed');
-    // The admin-only staging folder it made is gone again.
+    const file = patched();
+    for (const [name, entries, said] of [
+      ['dots.zip', [{ name: 'studio/bin/../../evil' }], 'unsafe path'],
+      ['ads.zip', [{ name: 'studio/bin/studio:evil' }], 'unsafe path'],
+      ['outside.zip', [{ name: 'evil.txt' }], 'outside studio/'],
+      ['extra.zip', [{ name: 'studio/evil.txt' }], 'not part of Studio'],
+      ['case.zip', [{ name: 'studio/bin/a' }, { name: 'studio/bin/A' }], 'differ only in case'],
+      ['link.zip', [{ name: 'studio/bin/link', link: true }], 'holds a link'],
+      ['other.zip', [{ name: 'studio/bin/studio' }], 'is not the Studio'],
+    ] as const) {
+      const r = bootstrap(
+        ['-Pair', pair, '-Tree', assets.tree, '-Bundle', zipOf(name, [...entries])],
+        {},
+        file,
+      );
+      expect(r.code, name).not.toBe(0);
+      expect(r.out, name).toContain(said);
+      expect(r.out, name).toContain('nothing was');
+    }
     expect(staged().length).toBe(before);
-    expect(run(['-Pair', 'studio-pair-1 lab short']).out).toContain('that is not a pairing line');
-    expect(run(['-Pair', pair], { SSH_CONNECTION: 'x 1 y 22' }).out).toContain(
-      'runs in an SSH session',
+  }, 300_000);
+
+  it("the real bundle with the lead's tree digest passes the checks and reaches relay install", () => {
+    const r = bootstrap(
+      ['-Pair', pair, '-Tree', assets.tree.toLowerCase(), '-Bundle', assets.zip],
+      {},
+      patched(),
     );
-  }, 120_000);
+    expect(r.out).toContain(`ok: tree digest ${assets.tree}`);
+    // Without a Tailscale interface and without --source the install itself stops, changing nothing.
+    expect(r.out).toContain('no Tailscale interface here');
+  }, 300_000);
 });

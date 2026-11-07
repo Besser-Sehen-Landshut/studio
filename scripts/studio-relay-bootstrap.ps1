@@ -1,39 +1,45 @@
 #Requires -RunAsAdministrator
 # Studio: set up this Windows PC as a relay worker in one step. Published with every release of
-# Studio, its version and the SHA-256 of that release's bundle written in, so it installs exactly
-# the Studio the lead pairs with. Run it in an elevated Windows PowerShell, at the PC itself or over
-# remote desktop, never over SSH, with the line `studio relay pair` printed on the lead:
-#
-#   & ([scriptblock]::Create((irm <release url>/studio-relay-bootstrap.ps1))) -Pair '<line>'
+# Studio, its version and repository written in. Run it in an elevated Windows PowerShell, at the PC
+# itself or over remote desktop, never over SSH, with the line `studio relay pair` printed on the
+# lead. That line downloads this script, runs it only when its SHA-256 is the one the lead's own
+# Studio expects, and hands it -Tree: the digest the bundle must have, from the lead's own Studio
+# (src/relay-bootstrap.ts). Nothing of the release vouches for itself.
 #
 # It checks Node.js (24 or later) and Git for Windows (2.35.2 or later), installed for all users,
 # and offers to install a missing one with winget (it asks first, -Yes answers yes); downloads the
-# release bundle (no git clone, no GitHub account) into a folder only administrators can change and
-# refuses it unless its SHA-256 is the one written in here; then runs `studio relay install --pair
-# <line>` from it, which installs everything else. -Uninstall runs `studio relay uninstall` from the
-# same bundle instead. -DryRun says what it would do and changes nothing. Anything after the named
-# parameters goes to `relay install` as it is (--source <range>, --interface <name>, --no-firewall).
+# release bundle (no git clone, no GitHub account) into a folder only administrators can change,
+# checks every entry before unpacking any, and refuses the bundle unless its tree digest is -Tree;
+# then runs `studio relay install --pair <line>` from it, which installs everything else.
+# -Uninstall runs `studio relay uninstall` from the same bundle instead (`studio relay bootstrap
+# uninstall` on the lead prints that line). -DryRun says what it would do and changes nothing.
+# Anything after the named parameters goes to `relay install` as it is (--source <range>,
+# --interface <name>, --no-firewall).
 [CmdletBinding()]
 param(
   [string]$Pair,
+  # The tree digest of the bundle, from the lead's own Studio.
+  [string]$Tree,
   [switch]$Yes,
   [switch]$Uninstall,
   [switch]$DryRun,
-  # A bundle downloaded already (offline): checked against the same SHA-256.
+  # A bundle downloaded already (offline): checked the same way.
   [string]$Bundle,
   [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest
 )
 $ErrorActionPreference = 'Stop'
 $version = '__STUDIO_VERSION__'
-$sha256 = '__STUDIO_BUNDLE_SHA256__'
 $repo = '__STUDIO_REPOSITORY__'
 $url = "https://github.com/$repo/releases/download/v$version/studio-$version.zip"
+# The paths of the plugin a relay worker runs (src/relay-bootstrap.ts BUNDLE_PATHS): nothing else.
+$bundlePaths = @('.claude-plugin', 'bin', 'capabilities', 'dist-bundle', 'hooks', 'schema', 'skills', 'package.json', 'LICENSE')
 $steps = 4
 function Step([int]$n, [string]$what) { Write-Output "[$n/$steps] $what" }
 function Fail([string]$why, [string]$fix) { throw "$why. Fix: $fix" }
 
 if ($version -like '__*') { Fail 'this is the template of the bootstrap, not a released one' 'download studio-relay-bootstrap.ps1 from a release of Studio' }
-if (-not $Uninstall -and -not $Pair -and -not $DryRun) { Fail 'no pairing line' "on the lead run: studio relay pair <label> <host>, then run this with -Pair '<the line it prints>'" }
+if (-not $Uninstall -and -not $Pair -and -not $DryRun) { Fail 'no pairing line' "on the lead run: studio relay pair <label> <host> and paste the whole line it prints" }
+if (-not $DryRun -and $Tree -notmatch '^[0-9A-Fa-f]{64}$') { Fail 'no tree digest from the lead' 'paste the whole line studio relay pair (or studio relay bootstrap uninstall) printed on the lead' }
 if ($Pair -and $Pair -notmatch '^studio-pair-1 [a-z][a-z0-9-]{0,31} [A-Za-z0-9_-]{43} ssh-ed25519 [A-Za-z0-9+/]{40,2000}={0,2}$') { Fail 'that is not a pairing line' "copy the whole line studio relay pair printed on the lead, in single quotes" }
 
 # Never over SSH: the install stops sshd while it runs and would cut this session off.
@@ -86,13 +92,13 @@ Step 1 'Node.js and Git for Windows'
 Need 'Node.js' $nodeExe 'v(\d+)\.(\d+)\.(\d+)' ([version]'24.0.0') 'OpenJS.NodeJS.LTS'
 Need 'Git for Windows' $gitExe '(\d+)\.(\d+)\.(\d+)' ([version]'2.35.2') 'Git.Git'
 
-Step 2 "Studio $version`: the release bundle, checked by its SHA-256"
+Step 2 "Studio $version`: the release bundle, checked against the lead's Studio"
 # The staging folder: made with its final, protected DACL (SYSTEM and administrators only, nothing
 # inherited) in one step, right in ProgramData, where other accounts may make folders of their own
 # but cannot rename or remove this one. Never the user's TEMP: a process of the same user without
 # elevation could change there what this elevated session hashed and then runs.
 $work = Join-Path $env:ProgramData ('studio-bootstrap-' + [Guid]::NewGuid().ToString('N'))
-if ($DryRun) { Write-Output "    would download $url into an admin-only folder in $env:ProgramData and check SHA-256 $sha256" }
+if ($DryRun) { Write-Output "    would download $url into an admin-only folder in $env:ProgramData and check its tree digest against the lead's" }
 else {
   $acl = New-Object Security.AccessControl.DirectorySecurity
   $acl.SetAccessRuleProtection($true, $false)
@@ -118,18 +124,32 @@ try {
       $ProgressPreference = 'SilentlyContinue'
       Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
     }
-    # One handle that shares reading only, open from the hash to the last unpacked byte: nobody can
-    # write, replace or delete the bundle in between.
+    # One handle that shares reading only, open from the first check to the last unpacked byte:
+    # nobody can write, replace or delete the bundle in between.
     Add-Type -AssemblyName System.IO.Compression
     $fs = [IO.File]::Open($zip, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     try {
       $got = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($fs)).Replace('-', '')
-      if ($got -ne $sha256) {
-        Fail "the bundle's SHA-256 is $got, not $sha256 as released: nothing was installed" 'download the bootstrap of the release again; if this repeats, do not use this network'
-      }
-      Write-Output "    ok: SHA-256 $got"
+      Write-Output "    SHA-256 of the download: $got (for reference: the tree digest decides)"
       $fs.Position = 0
       $archive = New-Object IO.Compression.ZipArchive($fs, [IO.Compression.ZipArchiveMode]::Read, $true)
+      # Every entry, before anything is unpacked: below studio/, no '..', '.' or empty part, no
+      # absolute path, drive letter, backslash or ':' (an alternate data stream), no link, no two
+      # names that differ only in case, and only the paths of the bundle.
+      $seen = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+      foreach ($e in $archive.Entries) {
+        $n = [string]$e.FullName
+        if (-not $n.StartsWith('studio/', [StringComparison]::Ordinal)) { Fail "the bundle holds $n outside studio/: nothing was unpacked" 'download the bootstrap of the release again' }
+        $rel = $n.Substring(7).TrimEnd('/')
+        if ($rel -eq '') { continue }
+        $parts = $rel.Split('/')
+        if ($n.Contains('\') -or $n.Contains(':') -or ($parts -contains '..') -or ($parts -contains '.') -or ($parts -contains '')) { Fail "the bundle names an unsafe path ($n): nothing was unpacked" 'download the bootstrap of the release again' }
+        if (-not ($bundlePaths -ccontains $parts[0])) { Fail "the bundle holds $n, which is not part of Studio: nothing was unpacked" 'download the bootstrap of the release again' }
+        $mode = 0
+        try { $mode = ([int64]$e.ExternalAttributes -shr 16) -band 0xF000 } catch { $mode = 0 }
+        if ($mode -eq 0xA000) { Fail "the bundle holds a link ($n): nothing was unpacked" 'download the bootstrap of the release again' }
+        if (-not $seen.Add($rel)) { Fail "the bundle holds $n twice (names that differ only in case): nothing was unpacked" 'download the bootstrap of the release again' }
+      }
       $top = [IO.Path]::GetFullPath($work).TrimEnd('\') + '\'
       foreach ($e in $archive.Entries) {
         $dest = [IO.Path]::GetFullPath((Join-Path $work $e.FullName))
@@ -144,6 +164,21 @@ try {
       }
       $archive.Dispose()
     } finally { $fs.Dispose() }
+    # The tree digest of what was unpacked, as the lead computes it over its own Studio.
+    $base = Join-Path $work 'studio'
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $rels = [Collections.Generic.List[string]]::new()
+    foreach ($f in [IO.Directory]::EnumerateFiles($base, '*', [IO.SearchOption]::AllDirectories)) { $rels.Add($f.Substring($base.Length + 1).Replace('\', '/')) }
+    $sorted = $rels.ToArray()
+    [Array]::Sort($sorted, [StringComparer]::Ordinal)
+    $text = New-Object Text.StringBuilder
+    foreach ($r in $sorted) {
+      $h = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes((Join-Path $base $r)))).Replace('-', '').ToLowerInvariant()
+      [void]$text.Append($h + '  ' + $r + "`n")
+    }
+    $digest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text.ToString()))).Replace('-', '')
+    if ($digest -ne $Tree) { Fail "the bundle is not the Studio $version of the lead (tree digest $digest, the lead expects $Tree): nothing was run" 'update Studio on the lead or use the release of its version; if this repeats, do not use this network' }
+    Write-Output "    ok: tree digest $digest, as the lead's Studio $version
   }
 
   $args2 = if ($Uninstall) { @('relay', 'uninstall') + @($Rest) } else { @('relay', 'install', '--pair', $Pair) + @($Rest) }
