@@ -415,10 +415,16 @@ describe('the install script', () => {
       '# studio relay begin',
       '# studio relay end',
       "$exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'",
-      "Start-Process -FilePath $exe -ArgumentList '-t' -Wait -PassThru -NoNewWindow",
-      'if ($null -eq $tested -or $tested.ExitCode -ne 0) {',
-      // Put back byte for byte, never re-encoded.
-      '[IO.File]::WriteAllBytes($conf, $before)',
+      // The new config goes to a temporary file, sshd checks that one (with a throwaway host key
+      // when there is none), and only an accepted one replaces the old in one step.
+      "$tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')",
+      "$sshdArgs = '-t -f \"' + $tmp + '\"'",
+      "$sshdArgs += ' -h \"' + $key + '\"'",
+      'if ($tested.ExitCode -ne 0) { throw "sshd does not accept the new sshd_config; $conf stays as it was" }',
+      '[IO.File]::Replace($tmp, $conf, [NullString]::Value)',
+      'SshdConfigSwap $conf $new $true',
+      // A user of the relay account's name that Studio did not make is never taken over.
+      "if ($null -ne $existing -and $existing.Description -ne 'Studio relay (SSH, forced command)') { throw",
       // Keys only for every account, at the top where sshd reads it first.
       '# studio relay begin global\nPasswordAuthentication no\nKbdInteractiveAuthentication no',
       // sshd stays stopped and closed until the end; a failure leaves it so.

@@ -163,6 +163,7 @@ export const startAnswer = z.strictObject({
   ...base,
   ok: z.literal(true),
   state: z.literal('starting'),
+  warnings,
 });
 export const statusAnswer = z.strictObject({
   ...base,
