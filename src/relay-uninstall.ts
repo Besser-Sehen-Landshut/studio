@@ -53,6 +53,8 @@ export interface InstallRecord {
   } | null;
   /** Whether the install put the network lockdown in place (false after `--no-firewall`). */
   firewall?: boolean;
+  /** The deny.hosts names the lockdown blocked, with the addresses their rules hold. */
+  lockdownNames?: Record<string, string[]>;
 }
 
 const START_TYPES = ['Automatic', 'Manual', 'Disabled'] as const;
@@ -129,6 +131,18 @@ export function parseInstallRecord(raw: unknown): InstallRecord | undefined {
     readPaths: paths.filter((x): x is string => typeof x === 'string'),
     spoolerDisabled: r.spoolerDisabled === true,
     ...(typeof r.firewall === 'boolean' ? { firewall: r.firewall } : {}),
+    ...(r.lockdownNames !== null && typeof r.lockdownNames === 'object'
+      ? {
+          lockdownNames: Object.fromEntries(
+            Object.entries(r.lockdownNames as Record<string, unknown>).map(([k, v]) => [
+              k,
+              (Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]).filter(
+                (x): x is string => typeof x === 'string',
+              ),
+            ]),
+          ),
+        }
+      : {}),
     prior,
   };
 }
@@ -418,6 +432,7 @@ ${
 }
 `
 }${step(9, 'services Studio changed')}
-${restoreSteps(o.record)}Write-Output 'done: Studio relay worker uninstalled'
+${restoreSteps(o.record)}Write-Output 'left installed: Git, Node.js and Claude Code (other programs may use them); to remove them: winget uninstall --id Git.Git; winget uninstall --id OpenJS.NodeJS.LTS; winget uninstall --id Anthropic.ClaudeCode'
+Write-Output 'done: Studio relay worker uninstalled'
 `;
 }

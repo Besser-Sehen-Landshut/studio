@@ -11,7 +11,7 @@ import { LOOPBACK } from './egress-proxy.js';
 import { HeldError } from './held.js';
 import type { Ports } from './ports.js';
 import { localSubnets, ownAddresses, smbCandidates, smbProblem } from './relay-hosts.js';
-import { lockdownProblem } from './relay-lockdown.js';
+import { denyNameDrift, lockdownProblem } from './relay-lockdown.js';
 import type { RelayWindows } from './relay-serve.js';
 import { readInstallRecord } from './relay-uninstall.js';
 import {
@@ -100,6 +100,8 @@ export function relayWindows(o: {
   interfaces?: () => ReturnType<typeof networkInterfaces>;
   /** Seam for tests: the lockdown check as the relay account. */
   lockdown?: (run: RunFile) => Promise<string | undefined>;
+  /** Seam for tests: name resolution of deny.hosts. */
+  lookup?: (name: string) => Promise<string[]>;
 }): RelayWindows {
   const run = o.run ?? runFile;
   const credFile = machineCredFile(o.machine);
@@ -148,13 +150,22 @@ export function relayWindows(o: {
       }
       // The network lockdown, as the relay account itself meets it: refused by the firewall. Only
       // an install with --no-firewall goes without, and doctor says so.
-      if (readInstallRecord(o.machine)?.firewall === false) {
+      const record = readInstallRecord(o.machine);
+      if (record?.firewall === false) {
         warnings.push(
           'no network lockdown (studio relay install --no-firewall): the relay account can reach the local network',
         );
       } else {
         const lock = await (o.lockdown ?? lockdownProblem)(run);
         if (lock !== undefined) return { problem: { kind: 'refused', line: lock }, warnings };
+        // A name of deny.hosts that moved since the install: a warning, doctor shows it.
+        warnings.push(
+          ...(await denyNameDrift({
+            denyHosts: hosts,
+            recorded: record?.lockdownNames ?? {},
+            ...(o.lookup === undefined ? {} : { lookup: o.lookup }),
+          })),
+        );
       }
       const web = await webClientProblem(run);
       if (web !== undefined) return { problem: { kind: 'held', line: web }, warnings };
