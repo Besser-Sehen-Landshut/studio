@@ -146,6 +146,8 @@ export interface RelayWindows {
   check(o: {
     deny: EnforcedDeny;
     hosts: readonly string[];
+    /** The lead the start is for (its label on the lead). */
+    lead?: string;
   }): Promise<{ problem?: { kind: 'held' | 'refused'; line: string }; warnings: string[] }>;
   /** What a launch needs, with the proxy up; `close` ends the proxy. */
   launch(networkAllow: readonly string[]): Promise<{
@@ -366,7 +368,7 @@ async function readiness(
     return { problem: { kind: 'held', line: busy }, deny, ...(load ? { load } : {}), warnings };
   }
   if (native && c.windows !== undefined) {
-    const w = await c.windows.check({ deny, hosts: deny.hosts ?? [] });
+    const w = await c.windows.check({ deny, hosts: deny.hosts ?? [], lead: c.lead });
     warnings.push(...w.warnings);
     if (w.problem !== undefined) {
       return { problem: w.problem, deny, ...(load ? { load } : {}), warnings };

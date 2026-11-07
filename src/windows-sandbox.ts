@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
   closeSync,
@@ -43,6 +43,7 @@ import {
   POINT_AND_PRINT,
 } from './relay-lockdown.js';
 import { FOLDER_FUNCTIONS, withSteps } from './relay-windows.js';
+import { SYSTEM_FOLDERS } from './system-folders-ps.js';
 
 /**
  * The crew sandbox of a worker on native Windows.
@@ -138,7 +139,7 @@ export function windowsCrewEnv(o: {
  * makes and the elevated worker compiles, and the folder its compiler writes in.
  */
 export const nativeCrewDir = (env: Record<string, string | undefined>): string =>
-  join(env.ProgramFiles ?? env.PROGRAMFILES ?? 'C:\\Program Files', 'Studio crew');
+  join(systemFolders(env).programFiles, 'Studio crew');
 export const nativeCrewPlaces = (crewDir: string): { treeSource: string; treeTemp: string } => ({
   treeSource: join(crewDir, 'studio-tree.cs'),
   treeTemp: join(crewDir, 'tmp'),
@@ -341,19 +342,104 @@ const SYSTEM_TOOLS = new Set([
   'whoami',
 ]);
 
+let windowsDir: string | undefined;
+
+/**
+ * The Windows folder of this machine, from the kernel's own link `\\SystemRoot` (opened as
+ * `\\?\GLOBALROOT\SystemRoot` and resolved to its drive path), never from `SystemRoot` or
+ * `windir` of the environment, which any process of the user can set. Throws when it cannot be
+ * resolved: nothing is started by a guessed path.
+ */
+export function windowsDirectory(): string {
+  if (windowsDir !== undefined) return windowsDir;
+  let real: string;
+  try {
+    real = realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot');
+  } catch (e) {
+    throw new Error(`cannot resolve the Windows folder (\\SystemRoot): ${(e as Error).message}`);
+  }
+  const dos = real.replace(/^\\\\\?\\/, '');
+  if (!/^[A-Za-z]:\\[^\\/:*?"<>|]+$/.test(dos)) {
+    throw new Error(`the Windows folder resolves to ${real}, not a folder on a drive`);
+  }
+  windowsDir = dos;
+  return dos;
+}
+
+let folders: { windows: string; programFiles: string; programData: string } | undefined;
+
+/**
+ * The Windows, Program Files and ProgramData folders of this machine as Windows knows them: the
+ * first from the kernel (`windowsDirectory`), the others from the known folders
+ * (HKLM, read by the system's PowerShell, `SystemFolders`), never from `ProgramFiles`,
+ * `ProgramData` or `SystemRoot` of the environment, which a user can set for every process of theirs,
+ * elevated ones included (HKCU\\Environment). Throws when they cannot be read. Elsewhere (tests,
+ * and Linux and macOS, where nothing uses them) the environment's, with the usual defaults.
+ */
+export function systemFolders(
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+): { windows: string; programFiles: string; programData: string } {
+  if (platform !== 'win32') {
+    return {
+      windows: env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows',
+      programFiles: env.ProgramFiles ?? env.PROGRAMFILES ?? 'C:\\Program Files',
+      programData: env.ProgramData ?? env.PROGRAMDATA ?? 'C:\\ProgramData',
+    };
+  }
+  if (folders === undefined) folders = readSystemFolders();
+  return folders;
+}
+
+/**
+ * `systemFolders` on Windows, read anew: the system's PowerShell runs `SystemFolders`
+ * (src/system-folders-ps.ts: HKLM, the 64-bit view, only `%SystemDrive%` expanded) with an
+ * environment of exactly SystemRoot, windir and SystemDrive from the kernel's Windows folder, so
+ * nothing of this process's environment reaches it.
+ */
+export function readSystemFolders(): {
+  windows: string;
+  programFiles: string;
+  programData: string;
+} {
+  const windows = windowsDirectory();
+  const out = execFileSync(
+    systemTool('powershell.exe'),
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `${SYSTEM_FOLDERS}$f = SystemFolders; [Console]::Out.Write($f.windows + '|' + $f.programFiles + '|' + $f.programData)`,
+    ],
+    {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 60_000,
+      cwd: windows,
+      env: { SystemRoot: windows, windir: windows, SystemDrive: windows.slice(0, 2) },
+    },
+  );
+  const [win, programFiles, programData] = out.trim().split('|');
+  if (win?.toLowerCase() !== windows.toLowerCase() || !programFiles || !programData) {
+    throw new Error(`the system's folders cannot be read (${out.trim()})`);
+  }
+  return { windows, programFiles, programData };
+}
+
 /**
  * The absolute path of a Windows system tool named bare: Node's spawn on Windows looks in the
  * working directory first, so a powershell.exe planted in a download folder would run (with
- * the rights of an elevated install). Anything else, and every other platform, as given.
+ * the rights of an elevated install). Anything else, and every other platform, as given. The
+ * Windows folder is the machine's (`windowsDirectory`); tests hand in their own.
  */
 export function systemTool(
   file: string,
-  env: Record<string, string | undefined> = process.env,
+  windows: () => string = windowsDirectory,
   platform: NodeJS.Platform = process.platform,
 ): string {
   if (platform !== 'win32') return file;
   const name = file.toLowerCase().replace(/\.exe$/, '');
-  const sys = win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows', 'System32');
+  const sys = win32.join(windows(), 'System32');
   if (name === 'powershell') return win32.join(sys, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return SYSTEM_TOOLS.has(name) ? win32.join(sys, `${name}.exe`) : file;
 }
@@ -1180,7 +1266,7 @@ export async function probeWindowsResults(
         script: keeperFile(o.stateRoot),
         credFile: o.grants.credFile,
         node: o.node ?? process.execPath,
-        cwd: o.env.SystemRoot ?? o.env.SYSTEMROOT ?? 'C:\\Windows',
+        cwd: systemFolders(o.env).windows,
         out: files.out,
         err: files.err,
         user: account.user,

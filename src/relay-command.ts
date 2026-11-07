@@ -33,10 +33,33 @@ import { startEgressProxy } from './egress-proxy.js';
 import { HeldError } from './held.js';
 import { installCommand, leadKind, onWindowsDrive } from './lead-machine.js';
 import { activeParks, blockHold, parkUntil, readLimits, writeLimits } from './limits.js';
-import { ensureStateDir, ownerStateRootFor, removeStateEntry, withBoardLock } from './paths.js';
+import {
+  ensureStateDir,
+  ownerStateRootFor,
+  removeStateEntry,
+  stateBaseFor,
+  withBoardLock,
+} from './paths.js';
 import { pinnedPlugins, STUDIO_REPOSITORY, STUDIO_VERSION } from './plugins.js';
 import type { Ports } from './ports.js';
 import { bootstrapCommand, leadAnchor } from './relay-bootstrap.js';
+import {
+  addToServeDeny,
+  DENY_NAMESPACE,
+  type DenySet,
+  denyDigest,
+  denyText,
+  denyUpdateMessage,
+  denyUpdateProblem,
+  EMPTY_DENY,
+  leadDenyFor,
+  parseDenyUpdate,
+  readDenyUpdates,
+  recordDenyUpdate,
+  renderDenyUpdate,
+  sshsigBlob,
+  unionDeny,
+} from './relay-deny-sync.js';
 import {
   collectRelay,
   followRelay,
@@ -97,6 +120,7 @@ import {
   leadFromAuthInfo,
   machineConfig,
   type RelayInstall,
+  relayDenyScript,
   relayHomeDefault,
   relayMachineDefault,
   relaySetupScript,
@@ -105,7 +129,7 @@ import {
 import { elevated, machineTreeProblem, relayWindows } from './relay-windows-check.js';
 import { setupText } from './setup-text.js';
 import { labelUsage, recordRun, USAGE_UNREADABLE } from './usage.js';
-import { findClaude, runFile, systemTool } from './windows-sandbox.js';
+import { findClaude, runFile, systemFolders, systemTool } from './windows-sandbox.js';
 import { pinnedMain } from './worker.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { updateWorkers, workerCrewName } from './worker-lead.js';
@@ -629,11 +653,7 @@ export function readHostKey(
 ): string | undefined {
   const file =
     platform === 'win32'
-      ? join(
-          env.ProgramData ?? env.PROGRAMDATA ?? 'C:\\ProgramData',
-          'ssh',
-          'ssh_host_ed25519_key.pub',
-        )
+      ? join(systemFolders(env).programData, 'ssh', 'ssh_host_ed25519_key.pub')
       : '/etc/ssh/ssh_host_ed25519_key.pub';
   try {
     return keyscanKey(`host ${readFileSync(file, 'utf8')}`);
@@ -809,7 +829,12 @@ export async function runRelayCommand(o: {
     return 0;
   }
   if (sub === 'install' && args.length === 0) {
-    const pair = o.values.pair === undefined ? undefined : parsePairLine(o.values.pair);
+    // `--pair -`: the line on stdin, never on a command line (process auditing logs those).
+    const pairText =
+      o.values.pair === '-'
+        ? ((await readAll(o.stdin)).trim().split(/\r?\n/)[0] ?? '')
+        : o.values.pair;
+    const pair = pairText === undefined ? undefined : parsePairLine(pairText);
     return await install({
       ...o,
       home,
@@ -824,9 +849,18 @@ export async function runRelayCommand(o: {
           machine,
           relayUser,
           install: i,
-          lockdown: await relayLockdown({ ...o, home, machine, exec: o.exec ?? systemExec }),
+          lockdown: await relayLockdown({
+            ...o,
+            home,
+            machine,
+            exec: o.exec ?? systemExec,
+            ...(pair === undefined ? {} : { extra: pair.deny }),
+          }),
         }),
     });
+  }
+  if (sub === 'update-deny' && args.length === 1) {
+    return await updateDeny({ ...o, home, machine, line: args[0] as string });
   }
   if (sub === 'uninstall' && args.length === 0) {
     return await uninstall({ ...o, home: o.values.home, machine, relayUser: o.values.user });
@@ -849,6 +883,9 @@ export async function runRelayCommand(o: {
     );
     return 0;
   }
+  if (sub === 'pair' && o.values['update-deny'] === true && args.length === 1) {
+    return await pairUpdateDeny({ ...o, label: args[0] as string });
+  }
   if (sub === 'pair' && o.values.connect !== true && args.length === 2) {
     return await pairStart({ ...o, label: args[0] as string, host: args[1] as string });
   }
@@ -856,6 +893,146 @@ export async function runRelayCommand(o: {
     return await pairConnect({ ...o, label: args[0] as string });
   }
   return undefined;
+}
+
+/**
+ * `studio relay pair <label> --update-deny` on the lead: the deny list of its projects for that
+ * label, signed with its key for that worker, as one line the PC takes with `relay update-deny`.
+ * No new pairing, no secret: the worker checks the signature against the key it authorized.
+ */
+async function pairUpdateDeny(o: {
+  label: string;
+  values: RelayValues;
+  owner: OwnerEnv;
+  env: Record<string, string | undefined>;
+  ports: Ports;
+  stdout: (s: string) => void;
+  exec?: Exec;
+}): Promise<number> {
+  if (!WORKER_LABEL_RE.test(o.label))
+    throw new Error('relay pair: a label is ^[a-z][a-z0-9-]{0,31}$');
+  const target = loadOwnerConfig(o.owner).workers?.relay[o.label];
+  if (target === undefined) {
+    throw new Error(
+      `${o.label} is not a paired relay worker here: studio relay pair ${o.label} <host>, then --connect`,
+    );
+  }
+  const t = setupText({ owner: o.owner, env: o.env });
+  const lead = leadDenyFor(stateBaseFor(o.owner), o.label);
+  for (const p of lead.problems) o.stdout(`${t.pairDenyProblem(p)}\n`);
+  if (o.values['dry-run'] === true) {
+    o.stdout(`${t.dryRun}\n`);
+    o.stdout(
+      `${t.would(`sign the deny list of your projects for ${o.label} (${denyText(lead.deny)}) with ${target.identityFile} and print the line for the PC`)}\n`,
+    );
+    return 0;
+  }
+  const issuedAt = Math.floor(o.ports.clock.now().getTime() / 1000);
+  const message = denyUpdateMessage(o.label, lead.deny, issuedAt);
+  const signed = await (o.exec ?? systemExec)(
+    'ssh-keygen',
+    ['-Y', 'sign', '-f', target.identityFile, '-n', DENY_NAMESPACE],
+    { input: message },
+  );
+  if (signed.code === 127) throw new Error(missingSsh('ssh-keygen', undefined));
+  if (signed.code !== 0) {
+    throw new Error(
+      `ssh-keygen could not sign with ${target.identityFile}: ${signed.stderr.trim()}`,
+    );
+  }
+  const line = renderDenyUpdate({
+    label: o.label,
+    deny: lead.deny,
+    issuedAt,
+    signature: sshsigBlob(signed.stdout),
+  });
+  // Program Files from HKLM (64-bit view, only %SystemDrive% expanded from the Windows folder),
+  // never from the environment: this line runs node.exe elevated.
+  const pf =
+    "$pf = [regex]::Replace([string][Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64').OpenSubKey('SOFTWARE\\Microsoft\\Windows\\CurrentVersion').GetValue('ProgramFilesDir', $null, 'DoNotExpandEnvironmentNames'), '%SystemDrive%', [Environment]::GetFolderPath('Windows').Substring(0, 2), 'IgnoreCase')";
+  o.stdout(
+    [
+      t.updateDenyPc,
+      `  ${pf}; & (Join-Path $pf 'Studio\\relay\\node\\node.exe') (Join-Path $pf 'Studio\\relay\\studio\\bin\\studio') relay update-deny '${line}'`,
+      t.updateDenyWhat(denyText(lead.deny)),
+      '',
+    ].join('\n'),
+  );
+  return 0;
+}
+
+/**
+ * `studio relay update-deny <line>` on the worker, elevated: the deny set of a lead's line, signed
+ * with the key its pairing recorded, joins `workers.serve.deny`, and the firewall rules of the
+ * lockdown are written anew from it. Nothing is removed; nothing else of the install changes.
+ */
+async function updateDeny(o: {
+  home: string;
+  machine: string;
+  line: string;
+  values: RelayValues;
+  owner: OwnerEnv;
+  env: Record<string, string | undefined>;
+  ports: Ports;
+  stdout: (s: string) => void;
+  stderr: (s: string) => void;
+  platform?: WorkerPlatform;
+  exec?: Exec;
+  elevated?: () => Promise<boolean | undefined>;
+}): Promise<number> {
+  const u = parseDenyUpdate(o.line);
+  const problem = denyUpdateProblem(
+    u,
+    readPairings(o.machine)[u.label]?.key,
+    o.ports.clock.now(),
+    readDenyUpdates(o.machine)[u.label],
+  );
+  if (problem !== undefined) throw new Error(problem);
+  const t = setupText({ owner: o.owner, env: o.env });
+  const record = readInstallRecord(o.machine);
+  if (o.values['dry-run'] === true) {
+    o.stdout(`${t.dryRun}\n`);
+    o.stdout(
+      `${t.would(`add ${denyText(u.deny)} to workers.serve.deny and write the firewall rules of the lockdown anew, elevated`)}\n`,
+    );
+    return 0;
+  }
+  await windowsAdmin({ ...o, what: 'update-deny' });
+  // sshd stops while the rules change: over SSH it would cut its own session off.
+  if (
+    o.values['i-am-local'] !== true &&
+    (sshSessionVar(o.env) || (await underSshd(o.exec ?? systemExec)))
+  ) {
+    throw new Error(
+      'relay update-deny stops sshd while it runs: run it at the machine or over remote desktop, never over SSH (--i-am-local if this is not an SSH session)',
+    );
+  }
+  if (record === undefined)
+    throw new Error('no install record here: run studio relay install first');
+  const config = join(machineConfig(o.machine), 'studio', 'config.yaml');
+  if (record.firewall !== false) {
+    const plan = await relayLockdown({ ...o, exec: o.exec ?? systemExec, extra: u.deny });
+    if (plan !== null) {
+      const r = await runScript(
+        o.exec ?? systemExec,
+        relayDenyScript({
+          machine: o.machine,
+          relayUser: record.relayUser ?? 'studio-relay',
+          crewPrefix: record.crewPrefix ?? 'studio-crew',
+          lockdown: plan,
+        }),
+        o.stdout,
+      );
+      if (r.code !== 0) {
+        o.stderr('studio: relay update-deny stopped; nothing was added to workers.serve.deny\n');
+        return 1;
+      }
+    }
+  }
+  const added = addToServeDeny(config, u.deny, DEFAULT_SERVE_CONFIG);
+  recordDenyUpdate(o.machine, u.label, u.issuedAt);
+  o.stdout(`${t.denyUpdated(denyText(added), record.firewall !== false)}\n`);
+  return 0;
 }
 
 /** The flags of `studio relay`. */
@@ -878,6 +1055,7 @@ export interface RelayValues {
   source?: string;
   interface?: string;
   connect?: boolean;
+  'update-deny'?: boolean;
 }
 
 /** Runs a program; output goes to `onOutput` as it comes when given. */
@@ -978,11 +1156,7 @@ function setupScriptFor(o: {
     // Node.js for all users, where only administrators change it: never the node this CLI runs on,
     // which may lie in a folder of the user's.
     source: {
-      node: win32.join(
-        o.env.ProgramFiles ?? o.env.PROGRAMFILES ?? 'C:\\Program Files',
-        'nodejs',
-        'node.exe',
-      ),
+      node: win32.join(systemFolders(o.env).programFiles, 'nodejs', 'node.exe'),
       studio: resolve(dirname(STUDIO_BIN), '..'),
     },
     ...(o.install === undefined ? {} : { install: o.install }),
@@ -1000,10 +1174,17 @@ async function relayLockdown(o: {
   home: string;
   machine: string;
   exec: Exec;
+  /** The deny set a pairing line or a deny update carries: added to the worker's own. */
+  extra?: Partial<DenySet>;
 }): Promise<LockdownPlan | null> {
   if (o.values['no-firewall'] === true) return null;
+  const own = serveSettings(relayOwner(o.owner, o.home, o.machine)).deny;
+  const set = unionDeny(
+    { hosts: own.hosts ?? [], ports: own.ports, prefixes: own.prefixes ?? [] },
+    o.extra ?? EMPTY_DENY,
+  );
   return lockdownFor({
-    deny: serveSettings(relayOwner(o.owner, o.home, o.machine)).deny,
+    deny: set,
     blockSmbLan: o.values['block-smb-lan'] === true,
   });
 }
@@ -1130,10 +1311,16 @@ async function install(o: {
       );
     }
     o.stdout(`${t.dryRun}\n`);
+    const f = systemFolders(o.env);
+    o.stdout(`${t.systemFolders(f.windows, f.programFiles, f.programData)}\n`);
     for (const line of installPlan(o)) o.stdout(`${t.would(line)}\n`);
     return 0;
   }
   await windowsAdmin({ ...o, what: 'install' });
+  {
+    const f = systemFolders(o.env);
+    o.stdout(`${t.systemFolders(f.windows, f.programFiles, f.programData)}\n`);
+  }
   // sshd is stopped while the install runs: over SSH it would cut its own session off.
   if (o.values['i-am-local'] !== true && (sshSessionVar(o.env) || (await underSshd(exec)))) {
     throw new Error(
@@ -1185,12 +1372,12 @@ async function install(o: {
   }
   // A new machine gets the defaults of a Windows relay worker; an existing config stays. The
   // config lives in the admin-only tree, written whole and swapped in.
+  // The deny set of the pairing line joins workers.serve.deny: the rules just written hold it
+  // already (the plan took it), so the start check finds it in both.
   const config = join(machineConfig(o.machine), 'studio', 'config.yaml');
-  if (!existsSync(config)) {
-    mkdirSync(dirname(config), { recursive: true });
-    const tmp = `${config}.${process.pid}.tmp`;
-    writeFileSync(tmp, DEFAULT_SERVE_CONFIG, { flag: 'wx' });
-    renameSync(tmp, config);
+  const added = addToServeDeny(config, o.pair?.deny ?? EMPTY_DENY, DEFAULT_SERVE_CONFIG);
+  if (added.hosts.length + added.ports.length + added.prefixes.length > 0) {
+    o.stdout(`${t.installDenyAdded(denyText(added))}\n`);
   }
   if (o.pair !== undefined) {
     writePairings(o.machine, {
@@ -1199,6 +1386,7 @@ async function install(o: {
         key: o.pair.key,
         secret: o.pair.secret,
         pairedAt: o.ports.clock.now().toISOString(),
+        denyDigest: denyDigest(o.pair.deny),
       },
     });
   }
@@ -1240,7 +1428,7 @@ function installPlan(o: {
     `write the sshd block (checked with sshd -t), start sshd on port ${port}, reachable only from ${scope}${o.values['keep-passwords'] === true ? '' : '; keys only for every account'}`,
     o.pair === undefined
       ? 'authorize the leads of the recorded pairings only'
-      : `record the pairing of ${o.pair.label} and authorize its key`,
+      : `record the pairing of ${o.pair.label} and authorize its key; add the deny list of the lead's projects (${denyText(o.pair.deny)}) to workers.serve.deny and to the firewall rules`,
     'print the host key fingerprint',
   ];
 }
@@ -1416,11 +1604,14 @@ async function pairStart(o: {
   const key = leadKeyFile(o.owner, o.label);
   leadFilesProblem(o.owner, key, o.platform ?? detectPlatform());
   const t = setupText({ owner: o.owner, env: o.env });
+  // The deny list of every project of this lead for that label goes into the line.
+  const lead = leadDenyFor(stateBaseFor(o.owner), o.label);
   if (o.values['dry-run'] === true) {
     o.stdout(`${t.dryRun}\n`);
     o.stdout(
-      `${t.would(`make the key ${key} (ed25519) for ${user}@${o.host}:${port} and print the one line for the PC; it waits an hour`)}\n`,
+      `${t.would(`make the key ${key} (ed25519) for ${user}@${o.host}:${port} and print the one line for the PC, with the deny list of your projects for ${o.label} (${denyText(lead.deny)}); it waits an hour`)}\n`,
     );
+    for (const p of lead.problems) o.stdout(`${t.pairDenyProblem(p)}\n`);
     return 0;
   }
   mkdirSync(dirname(key), { recursive: true, mode: 0o700 });
@@ -1450,14 +1641,17 @@ async function pairStart(o: {
     secret,
     identityFile: key,
     createdAt: o.ports.clock.now().toISOString(),
+    deny: lead.deny,
   });
-  const line = renderPairLine({ label: o.label, secret, key: pub });
+  const line = renderPairLine({ label: o.label, secret, key: pub, deny: lead.deny });
+  for (const p of lead.problems) o.stdout(`${t.pairDenyProblem(p)}\n`);
   o.stdout(
     [
       `1. ${t.pairPc}`,
       `   ${bootstrapCommand({ pair: line })}`,
       `   ${t.pairWhat(STUDIO_VERSION)}`,
-      `   ${t.pairHasStudio(`studio relay install --pair "${line}"`)}`,
+      `   ${t.pairDeny(denyText(lead.deny))}`,
+      `   ${t.pairHasStudio(`'${line}' | studio relay install --pair -`)}`,
       `2. ${t.pairThen(`studio relay pair ${o.label} --connect`)}`,
       t.pairSecret,
       '',
@@ -1524,9 +1718,12 @@ async function pairConnect(o: {
   const { answer } = await relayCall(transport, 'hello', {}, { timeoutMs: 60_000 });
   if (!answer.ok) throw new Error(`the worker answered: ${answer.line}`);
   const proof = answer.pairProofs.find((x) => x.label === o.label);
-  if (proof === undefined || !proofHolds(p.secret, key, proof.mac)) {
+  if (
+    proof === undefined ||
+    !proofHolds(p.secret, key, proof.mac, denyDigest(p.deny ?? EMPTY_DENY))
+  ) {
     throw new Error(
-      `the worker did not prove this host key with the pairing's secret: nothing was pinned. Run studio relay install --pair with the line studio relay pair printed, within the hour, on the worker itself`,
+      `the worker did not prove this host key and the deny list of the line with the pairing's secret: nothing was pinned. Run studio relay install --pair with the whole line studio relay pair printed, within the hour, on the worker itself`,
     );
   }
   writeRelayTarget(o.owner, o.label, {

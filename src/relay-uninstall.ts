@@ -358,7 +358,7 @@ export function relayUninstallScript(o: UninstallOptions): string {
     `Write-Output ${psQuote(`[${n}/${UNINSTALL_STEPS}] ${what}`)}`;
   const conf =
     o.sshdConfig === undefined
-      ? "Join-Path $env:ProgramData 'ssh\\sshd_config'"
+      ? "Join-Path ($sys.programData) 'ssh\\sshd_config'"
       : psQuote(o.sshdConfig);
   const adminCopy = join(machineStudio(o.machine), 'bin', 'studio-tree.cs');
   return `#Requires -RunAsAdministrator

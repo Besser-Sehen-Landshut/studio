@@ -15,8 +15,10 @@
 // well, so the output shows what the rule changed. Anything else fails the install closed. Every
 // start of a relay job checks the same as the relay account: the rule in the active policy, every
 // firewall profile on, every current local prefix inside the rule, and the probe.
+
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { hextets, ipv4 } from './egress-proxy.js';
+import { SYS_INIT } from './system-folders-ps.js';
 import { powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
 
 /** Resolves a name to its addresses, empty when it does not resolve. */
@@ -380,22 +382,26 @@ export function lockdownFunctions(plan: LockdownPlan): string {
   const list = (xs: readonly (string | number)[]) =>
     `@(${xs.map((x) => (typeof x === 'number' ? String(x) : psQuote(x))).join(', ')})`;
   const accepted = [...NO_ROUTE, FIREWALL_REFUSED].map((c) => `'${c}'`).join(', ');
-  return `$lockGroup = ${psQuote(LOCKDOWN_GROUP)}
+  return `${SYS_INIT}$lockGroup = ${psQuote(LOCKDOWN_GROUP)}
 $lockLocal = ${list(plan.local)}
 $lockHosts = ${list(plan.hosts)}
 $lockPorts = ${list(plan.ports)}
 $lockSmbLan = ${plan.blockSmbLan ? '$true' : '$false'}
-${ROUTE_FUNCTIONS}function LockdownRules([string[]]$sids) {
-  Get-NetFirewallRule -Group $lockGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+${ROUTE_FUNCTIONS}# The new rules first, under names of their own, and only then the old ones go: there is never a
+# moment without a rule (for a while both block). A rule that cannot be made leaves the old ones.
+function LockdownRules([string[]]$sids) {
+  $old = @(Get-NetFirewallRule -Group $lockGroup -ErrorAction SilentlyContinue)
+  $tag = [Guid]::NewGuid().ToString('N')
   $who = 'D:' + (($sids | ForEach-Object { "(A;;CC;;;$_)" }) -join '')
   $base = @{ Group = $lockGroup; Direction = 'Outbound'; Action = 'Block'; Profile = 'Any' }
   $routes = @(LocalRoutes)
-  New-NetFirewallRule @base -LocalUser $who -DisplayName ${psQuote(LOCKDOWN_RULE)} -RemoteAddress ($lockLocal + $lockHosts + $routes) | Out-Null
+  New-NetFirewallRule @base -Name ('StudioLockdown-local-' + $tag) -LocalUser $who -DisplayName ${psQuote(LOCKDOWN_RULE)} -RemoteAddress ($lockLocal + $lockHosts + $routes) | Out-Null
   foreach ($p in @('TCP', 'UDP')) {
-    if ($lockPorts.Count -gt 0) { New-NetFirewallRule @base -LocalUser $who -DisplayName $(if ($p -eq 'TCP') { ${psQuote(lockdownPortsRule('TCP'))} } else { ${psQuote(lockdownPortsRule('UDP'))} }) -Protocol $p -RemotePort ([string[]]$lockPorts) | Out-Null }
+    if ($lockPorts.Count -gt 0) { New-NetFirewallRule @base -Name ('StudioLockdown-ports-' + $p + '-' + $tag) -LocalUser $who -DisplayName $(if ($p -eq 'TCP') { ${psQuote(lockdownPortsRule('TCP'))} } else { ${psQuote(lockdownPortsRule('UDP'))} }) -Protocol $p -RemotePort ([string[]]$lockPorts) | Out-Null }
   }
   # --block-smb-lan: SMB to the local networks for every account, the owner's own shares included.
-  if ($lockSmbLan) { New-NetFirewallRule @base -DisplayName ${psQuote(SMB_LAN_RULE)} -Protocol TCP -RemotePort @('445', '139') -RemoteAddress ($lockLocal + $routes) | Out-Null }
+  if ($lockSmbLan) { New-NetFirewallRule @base -Name ('StudioLockdown-smb-' + $tag) -DisplayName ${psQuote(SMB_LAN_RULE)} -Protocol TCP -RemotePort @('445', '139') -RemoteAddress ($lockLocal + $routes) | Out-Null }
+  if ($old.Count -gt 0) { $old | Remove-NetFirewallRule }
 }
 # The rules as Windows applies them: present, on, blocking, bound to every SID; every firewall
 # profile on and taking local rules. Returns the problems.
@@ -425,7 +431,7 @@ function ConnectAs([string]$name, [string]$sid, [string]$plain, [string[]]$targe
   foreach ($r in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @($sid, 'ReadAndExecute'))) {
     $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($r[0])), $r[1], 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
   }
-  $dir = Join-Path $env:ProgramData ('studio-probe-' + [Guid]::NewGuid().ToString('N'))
+  $dir = Join-Path ($sys.programData) ('studio-probe-' + [Guid]::NewGuid().ToString('N'))
   $null = [IO.Directory]::CreateDirectory($dir, $acl)
   $file = Join-Path $dir 'probe.ps1'
   $out = Join-Path $dir 'out.json'
@@ -435,8 +441,8 @@ function ConnectAs([string]$name, [string]$sid, [string]$plain, [string[]]$targe
     [IO.File]::WriteAllText($file, $script, (New-Object Text.ASCIIEncoding))
     $secure = ConvertTo-SecureString $plain -AsPlainText -Force
     $c = New-Object System.Management.Automation.PSCredential ("$env:COMPUTERNAME\\$name", $secure)
-    $ps = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $file + '"')) -Credential $c -WorkingDirectory $env:SystemRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    $ps = Join-Path ($sys.windows) 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $file + '"')) -Credential $c -WorkingDirectory ($sys.windows) -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'the probe as the throwaway user did not finish' }
     $raw = Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue
     if (-not $raw) { throw "the probe as the throwaway user gave no answer: $(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)" }
@@ -548,12 +554,15 @@ export interface LockdownState {
 export interface LockdownWant {
   spans: { entry: string; from: string }[];
   ports: readonly number[];
+  /** The lead the start is for: its `--update-deny` line is the fix. */
+  lead?: string;
 }
 
 /** `LockdownWant` from the deny list in force: the plan the install would write now. */
 export async function lockdownWant(o: {
   deny: { hosts: readonly string[]; ports: readonly number[]; prefixes?: readonly string[] };
   lookup?: (name: string) => Promise<string[]>;
+  lead?: string;
 }): Promise<LockdownWant> {
   const plan = await lockdownFor(o);
   const fromPrefix = new Set(
@@ -571,6 +580,7 @@ export async function lockdownWant(o: {
         .map((entry) => ({ entry, from: 'deny.hosts' })),
     ],
     ports: plan.ports,
+    ...(o.lead === undefined ? {} : { lead: o.lead }),
   };
 }
 
@@ -679,8 +689,8 @@ export function lockdownGaps(s: LockdownState, want: LockdownWant): string[] {
 }
 
 /** The fix of a deny entry without its rule. */
-export const GAP_FIX =
-  'run studio relay install again, elevated, so the firewall rules follow the config (an entry from a repository goes into workers.serve.deny of this worker first)';
+export const gapFix = (lead = '<label>'): string =>
+  `on the lead, run studio relay pair ${lead} --update-deny and paste the line it prints in an elevated PowerShell on this PC (it adds the entry to workers.serve.deny and writes the firewall rules anew)`;
 
 /** `judgeLockdown`, and with `want` the gaps of the config: those hold the start. */
 export function judgeLockdownAll(
@@ -690,7 +700,9 @@ export function judgeLockdownAll(
   const base = judgeLockdownBase(s);
   if (base !== undefined) return { kind: 'refused', line: base };
   const gaps = want === undefined ? [] : lockdownGaps(s, want);
-  return gaps.length === 0 ? undefined : { kind: 'held', line: `${gaps.join('; ')}: ${GAP_FIX}` };
+  return gaps.length === 0
+    ? undefined
+    : { kind: 'held', line: `${gaps.join('; ')}: ${gapFix(want?.lead)}` };
 }
 
 function judgeLockdownBase(s: LockdownState): string | undefined {

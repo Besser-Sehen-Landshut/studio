@@ -13,6 +13,7 @@ import type { Ports } from './ports.js';
 import { localSubnets, ownAddresses, smbCandidates, smbProblem } from './relay-hosts.js';
 import {
   denyNameDrift,
+  gapFix,
   type LockdownWant,
   lockdownProblem,
   lockdownWant,
@@ -22,6 +23,7 @@ import {
 import type { RelayWindows } from './relay-serve.js';
 import { readInstallRecord } from './relay-uninstall.js';
 import {
+  ANCESTOR_CHECK,
   brokerResultFiles,
   brokerTasks,
   loopbackListeners,
@@ -145,7 +147,7 @@ export function relayWindows(o: {
       ...(o.spawn === undefined ? {} : { spawn: o.spawn }),
     });
   return {
-    async check({ deny, hosts }) {
+    async check({ deny, hosts, lead }) {
       const warnings: string[] = [];
       const admin = await elevated(run);
       if (admin !== false) {
@@ -173,6 +175,7 @@ export function relayWindows(o: {
         const want = await lockdownWant({
           deny: { hosts, ports: deny.ports, prefixes: deny.prefixes ?? [] },
           ...(o.lookup === undefined ? {} : { lookup: o.lookup }),
+          ...(lead === undefined ? {} : { lead }),
         });
         const lock = await (o.lockdown ?? lockdownProblem)(run, want);
         if (lock !== undefined) return { problem: lock, warnings };
@@ -186,7 +189,7 @@ export function relayWindows(o: {
           return {
             problem: {
               kind: 'held',
-              line: `${drift.join('; ')}: run studio relay install again, elevated, so the firewall rules follow the names`,
+              line: `${drift.join('; ')}: ${gapFix(lead)}`,
             },
             warnings,
           };
@@ -360,7 +363,14 @@ export function relayWindows(o: {
  */
 export async function machineTreeProblem(
   run: RunFile,
-  o: { machine: string; home: string; node: string; studioBin: string },
+  o: {
+    machine: string;
+    home: string;
+    node: string;
+    studioBin: string;
+    /** Further owners trusted above Studio's folders (tests: the runner's own account). */
+    trustedOwners?: readonly string[];
+  },
 ): Promise<string | undefined> {
   const inside = (p: string, dir: string) =>
     p.toLowerCase().startsWith(`${dir.toLowerCase().replace(/[\\/]+$/, '')}\\`);
@@ -370,7 +380,8 @@ export async function machineTreeProblem(
   const m = psQuote(o.machine);
   const h = psQuote(o.home);
   const script = `$ErrorActionPreference = 'Stop'
-$admin = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+${ANCESTOR_CHECK}$admin = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$trusted = $admin + @(${(o.trustedOwners ?? []).map(psQuote).join(', ')})
 $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $write = [Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteExtendedAttributes, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
 $fill = [Security.AccessControl.FileSystemRights]'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize'
@@ -404,6 +415,14 @@ $folders = @(
   @((Join-Path ${m} 'config'), 'read'), @((Split-Path -Parent ${h}), 'read'), @(${h}, 'read'),
   @((Join-Path ${h} 'state'), 'fill')
 )
+# Every folder above Studio's own, up to the drive: owned by administrators, and nobody else may
+# delete, rename or re-own the way down.
+$own = @($folders | ForEach-Object { ([string]$_[0]).ToLowerInvariant() })
+foreach ($p in @(@(Up ${m}) + @(Up (Join-Path ${h} 'state')) | Select-Object -Unique)) {
+  if (-not (Test-Path -LiteralPath $p) -or $own -contains $p.ToLowerInvariant()) { continue }
+  $a = AncestorProblem $p $trusted
+  if ($a) { $problems += $a }
+}
 foreach ($f in $folders) {
   $p = $f[0]
   if (-not (Test-Path -LiteralPath $p)) { continue }

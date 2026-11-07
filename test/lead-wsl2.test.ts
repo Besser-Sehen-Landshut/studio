@@ -200,7 +200,7 @@ describe('relay pair from a WSL2 lead', () => {
     expect(await l.run(['pair', 'lab', 'worker.example'])).toBe(0);
     const printed = l.out.join('');
     expect(printed).toContain("studio-relay-bootstrap.ps1').RawContentStream.ToArray()");
-    expect(printed).toContain("-Pair 'studio-pair-1 lab ");
+    expect(printed).toContain("-Pair 'studio-pair-2 lab ");
     expect(printed).toContain('never over SSH');
     l.take();
     expect(await l.run(['pair', 'lab'], { connect: true })).toBe(0);

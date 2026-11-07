@@ -57,7 +57,7 @@ function ForgetPair {
 ForgetPair
 if (-not $Uninstall -and -not $Pair -and -not $DryRun) { Fail 'no pairing line' "on the lead run: studio relay pair <label> <host> and paste the whole line it prints" }
 if (-not $DryRun -and $Tree -notmatch '^[0-9A-Fa-f]{64}$') { Fail 'no tree digest from the lead' 'paste the whole line studio relay pair (or studio relay bootstrap uninstall) printed on the lead' }
-if ($Pair -and $Pair -notmatch '^studio-pair-1 [a-z][a-z0-9-]{0,31} [A-Za-z0-9_-]{43} ssh-ed25519 [A-Za-z0-9+/]{40,2000}={0,2}$') { Fail 'that is not a pairing line' "copy the whole line studio relay pair printed on the lead, in single quotes" }
+if ($Pair -and $Pair -cnotmatch '^studio-pair-2 [a-z][a-z0-9-]{0,31} [A-Za-z0-9_-]{43} ssh-ed25519 [A-Za-z0-9+/]{40,2000}={0,2} [A-Za-z0-9_-]{1,8000} [0-9a-f]{64}$') { Fail 'that is not a pairing line' "copy the whole line studio relay pair printed on the lead, in single quotes" }
 
 # Never over SSH: the install stops sshd while it runs and would cut this session off.
 $overSsh = [bool]($env:SSH_CONNECTION -or $env:SSH_CLIENT -or $env:SSH_TTY)
@@ -76,15 +76,47 @@ if ($overSsh) { Fail 'this runs in an SSH session, and the install stops sshd' '
 # elevated session starts by name must not come from there.
 function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') }
 Fresh
+# The machine's folders from the system (HKLM, the kernel), never from this session's environment,
+# which the user can set (HKCU\Environment). The same function as Studio's elevated scripts.
+function SystemFolders {
+  $win = [Environment]::GetFolderPath('Windows')
+  if ($win -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|%]+$') { throw "Windows names no Windows folder ($win)" }
+  $drive = $win.Substring(0, 2)
+  $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+  $raw = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+  $pf = [string]$hklm.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion').GetValue('ProgramFilesDir', $null, $raw)
+  $pd = [string]$hklm.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList').GetValue('ProgramData', $null, $raw)
+  $owners = @('S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464', 'S-1-5-18', 'S-1-5-32-544')
+  $out = @{ windows = $win }
+  foreach ($k in @(@('programFiles', $pf), @('programData', $pd))) {
+    $v = [regex]::Replace($k[1], '%SystemDrive%', $drive, 'IgnoreCase').TrimEnd('\')
+    if ($v -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|%]+$' -or -not $v.StartsWith($drive + '\', [StringComparison]::OrdinalIgnoreCase) -or $v -ieq ($drive + '\Users') -or $v.StartsWith($drive + '\Users\', [StringComparison]::OrdinalIgnoreCase)) { throw "Windows names no usable $($k[0]) folder ($v)" }
+    if (-not [IO.Directory]::Exists($v)) { throw "$v ($($k[0])) does not exist" }
+    $owner = (New-Object IO.DirectoryInfo($v)).GetAccessControl([Security.AccessControl.AccessControlSections]::Owner).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($owners -notcontains $owner) { throw "$v ($($k[0])) is owned by $owner, not by TrustedInstaller, SYSTEM or administrators" }
+    $out[$k[0]] = $v
+  }
+  $out
+}
+$sys = SystemFolders
+$programFiles = $sys.programFiles
+$programData = $sys.programData
 # Node.js and Git run from where winget installs them for all users (Program Files, which only
 # administrators change), never from a folder the user could write.
-$nodeExe = Join-Path $env:ProgramFiles 'nodejs\node.exe'
-$gitExe = Join-Path $env:ProgramFiles 'Git\cmd\git.exe'
+$nodeExe = Join-Path $programFiles 'nodejs\node.exe'
+$gitExe = Join-Path $programFiles 'Git\cmd\git.exe'
 function VersionOf([string]$exe, [string]$pattern) {
   if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { return $null }
   $text = [string](& $exe --version 2>$null)
   if ($text -notmatch $pattern) { return $null }
   [version]('{0}.{1}.{2}' -f $Matches[1], $Matches[2], $Matches[3])
+}
+# winget from its package in Program Files, never the alias in the user's WindowsApps folder.
+function Winget {
+  $apps = Join-Path $programFiles 'WindowsApps'
+  @(Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe' -ErrorAction SilentlyContinue |
+    Sort-Object { try { [version]($_.Name.Split('_')[1]) } catch { [version]'0.0' } } -Descending |
+    ForEach-Object { Join-Path $_.FullName 'winget.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
 }
 # A missing or old program: winget installs it for the whole machine, after a yes.
 function Need([string]$what, [string]$exe, [string]$pattern, [version]$min, [string]$id) {
@@ -92,13 +124,14 @@ function Need([string]$what, [string]$exe, [string]$pattern, [version]$min, [str
   if ($null -ne $have -and $have -ge $min) { Write-Output "    ok: $what $have ($exe)"; return }
   $why = if ($null -eq $have) { "not installed for all users ($exe)" } else { "$have, older than $min" }
   if ($DryRun) { Write-Output "    would install: $what ($why) with winget install --id $id"; return }
-  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Fail "$what is $why and winget is not there" "install $what $min or later for all users, then run this again" }
+  $wg = Winget
+  if (-not $wg) { Fail "$what is $why and winget is not there" "install $what $min or later for all users, then run this again" }
   if (-not $Yes) {
     $a = Read-Host "    $what is $why. Install it now with winget (winget install --id $id)? [y/N]"
     if ($a -notmatch '^(y|yes|j|ja)$') { Fail "$what is $why" "winget install --id $id --exact --scope machine, then run this again" }
   }
   Write-Output "    installing: $what (winget $id)"
-  winget install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
+  & $wg install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
   Fresh
   $have = VersionOf $exe $pattern
   if ($null -eq $have -or $have -lt $min) { Fail "$what is still $why after winget" "install $what $min or later for all users, then run this again" }
@@ -114,8 +147,8 @@ Step 2 "Studio $version`: the release bundle, checked against the lead's Studio"
 # inherited) in one step, right in ProgramData, where other accounts may make folders of their own
 # but cannot rename or remove this one. Never the user's TEMP: a process of the same user without
 # elevation could change there what this elevated session hashed and then runs.
-$work = Join-Path $env:ProgramData ('studio-bootstrap-' + [Guid]::NewGuid().ToString('N'))
-if ($DryRun) { Write-Output "    would download $url into an admin-only folder in $env:ProgramData and check its tree digest against the lead's" }
+$work = Join-Path $programData ('studio-bootstrap-' + [Guid]::NewGuid().ToString('N'))
+if ($DryRun) { Write-Output "    would download $url into an admin-only folder in $programData and check its tree digest against the lead's" }
 else {
   $acl = New-Object Security.AccessControl.DirectorySecurity
   $acl.SetAccessRuleProtection($true, $false)
@@ -206,8 +239,8 @@ try {
     Write-Output "    ok: tree digest $digest, as the lead's Studio $version"
   }
 
-  $args2 = if ($Uninstall) { @('relay', 'uninstall') + @($Rest) } else { @('relay', 'install', '--pair', $Pair) + @($Rest) }
-  $shown = if ($Uninstall) { 'studio relay uninstall' } else { 'studio relay install --pair <line>' }
+  $args2 = if ($Uninstall) { @('relay', 'uninstall') + @($Rest) } else { @('relay', 'install', '--pair', '-') + @($Rest) }
+  $shown = if ($Uninstall) { 'studio relay uninstall' } else { 'studio relay install --pair -' }
   Step 3 $(if ($Uninstall) { 'remove the relay worker' } else { 'install the relay worker (it says each step)' })
   if ($DryRun) {
     Write-Output "    would run: $shown $($Rest -join ' ') with $nodeExe"
@@ -215,7 +248,17 @@ try {
     # Nothing of this session's environment steers Node.js or npm: no NODE_OPTIONS (preloads),
     # NODE_PATH, NODE_EXTRA_CA_CERTS or any other NODE_* and npm_config_*.
     foreach ($k in @(Get-ChildItem Env: | Where-Object { $_.Name -like 'NODE_*' -or $_.Name -like 'npm_config_*' } | ForEach-Object { $_.Name })) { Remove-Item -LiteralPath "Env:$k" -ErrorAction SilentlyContinue }
-    & $nodeExe $studio @args2
+    # The system's folders, as Windows knows them, for Node.js and everything it starts: a value of
+    # the user's (HKCU\Environment) would steer where the install looks and writes.
+    $windowsDir = $sys.windows
+    $env:ProgramFiles = $programFiles
+    $env:ProgramData = $programData
+    $env:ALLUSERSPROFILE = $programData
+    $env:SystemRoot = $windowsDir
+    $env:windir = $windowsDir
+    # The pairing line goes to relay install on its stdin, never on a command line (which process
+    # creation auditing, event 4688, would log with its secret).
+    if ($Uninstall) { & $nodeExe $studio @args2 } else { $Pair | & $nodeExe $studio @args2 }
     $code = $LASTEXITCODE
   }
 } finally {

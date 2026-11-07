@@ -1,13 +1,16 @@
 // Pairing a lead with a relay worker without copying files around (src/relay-command.ts):
 //
 // 1. On the lead, `studio relay pair <label> <host>` makes the lead's key for that worker and
-//    prints one pairing line: the label, a single-use pairing secret and the lead's public key.
+//    prints one pairing line: the label, a single-use pairing secret, the lead's public key and
+//    the deny set of the lead's projects for that label (src/relay-deny-sync.ts), with an
+//    HMAC-SHA256 under the secret over all of it.
 // 2. On the worker, `studio relay install --pair "<line>"` records the pairing and authorizes that
 //    key with the forced command. Its authorized keys file holds exactly the keys of the pairings
 //    it records, nothing else.
 // 3. On the lead, `studio relay pair <label> --connect` reads the worker's host key, connects with
 //    it pinned, and pins it for good only when the worker proves it is the machine the line was
-//    pasted on: within the hour after the install it answers HMAC-SHA256(secret, its host key),
+//    pasted on: within the hour after the install it answers HMAC-SHA256(secret, its host key and
+//    the digest of the deny set it recorded), so a line that lost deny entries fails here too;
 //    which only a holder of the secret can compute, checked in constant time. The secret travels
 //    only in the pasted line, is used once, and expires after an hour. Both sides also show the
 //    host key's full SHA256 fingerprint for a comparison by eye, which no longer carries the check.
@@ -25,13 +28,21 @@ import {
   WORKER_LABEL_RE,
 } from './config.js';
 import { ensureStateDir, ownerStateRootFor, writeStateFile } from './paths.js';
+import {
+  type DenySet,
+  decodeDeny,
+  denyDigest,
+  denyJson,
+  EMPTY_DENY,
+  encodeDeny,
+} from './relay-deny-sync.js';
 import { authorizedKeyLine } from './relay-windows.js';
 
 /** How long a pairing secret holds, on the lead and on the worker. */
 export const PAIR_TTL_MS = 60 * 60_000;
 /** 32 random bytes, base64url without padding. */
 export const PAIR_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
-const PAIR_PREFIX = 'studio-pair-1';
+const PAIR_PREFIX = 'studio-pair-2';
 
 export const newPairSecret = (): string => randomBytes(32).toString('base64url');
 
@@ -44,14 +55,26 @@ export function keyFingerprint(key: string): string {
   return `SHA256:${createHash('sha256').update(blob).digest('base64').replace(/=+$/, '')}`;
 }
 
-/** The worker's proof for one pairing: HMAC-SHA256 of its host key under the pairing secret. */
-export const pairProof = (secret: string, hostKey: string): string =>
-  createHmac('sha256', secret).update(keyOnly(hostKey)).digest('hex');
+/**
+ * The worker's proof for one pairing: HMAC-SHA256, under the pairing secret, of its host key and
+ * the digest of the deny set it recorded from the line.
+ */
+export const pairProof = (
+  secret: string,
+  hostKey: string,
+  deny: string = denyDigest(EMPTY_DENY),
+): string =>
+  createHmac('sha256', secret)
+    .update(`${keyOnly(hostKey)}\n${deny}`)
+    .digest('hex');
 
-/** Whether `mac` proves `hostKey` for `secret`; compared in constant time. */
-export function proofHolds(secret: string, hostKey: string, mac: string): boolean {
+/** Whether `mac` proves `hostKey` and the deny digest for `secret`; compared in constant time. */
+export function proofHolds(secret: string, hostKey: string, mac: string, deny?: string): boolean {
   if (!/^[0-9a-f]{64}$/.test(mac)) return false;
-  return timingSafeEqual(Buffer.from(pairProof(secret, hostKey), 'hex'), Buffer.from(mac, 'hex'));
+  return timingSafeEqual(
+    Buffer.from(pairProof(secret, hostKey, deny), 'hex'),
+    Buffer.from(mac, 'hex'),
+  );
 }
 
 export interface PairLine {
@@ -59,29 +82,55 @@ export interface PairLine {
   secret: string;
   /** The lead's public key, `<type> <base64>`. */
   key: string;
+  /** The deny set of the lead's projects for this label. */
+  deny: DenySet;
 }
+
+/** The MAC of a line: HMAC-SHA256 under its secret over the prefix, label, key and deny set. */
+const lineMac = (p: PairLine): string =>
+  createHmac('sha256', p.secret)
+    .update(`${PAIR_PREFIX}\n${p.label}\n${keyOnly(p.key)}\n${denyJson(p.deny)}`)
+    .digest('hex');
 
 /** The one line the owner carries from the lead to the worker. */
 export const renderPairLine = (p: PairLine): string =>
-  `${PAIR_PREFIX} ${p.label} ${p.secret} ${p.key}`;
+  `${PAIR_PREFIX} ${p.label} ${p.secret} ${p.key} ${encodeDeny(p.deny)} ${lineMac(p)}`;
 
 export function parsePairLine(line: string): PairLine {
   const parts = line.trim().split(/\s+/);
-  const [prefix, label, secret, type, blob] = parts;
+  const [prefix, label, secret, type, blob, deny, mac] = parts;
+  const bad = () =>
+    new Error(
+      'not a pairing line: studio relay pair <label> <host> on the lead prints it (studio-pair-2 <label> <secret> <key> <deny set> <mac>)',
+    );
   if (
-    parts.length !== 5 ||
+    parts.length !== 7 ||
     prefix !== PAIR_PREFIX ||
     label === undefined ||
     !WORKER_LABEL_RE.test(label) ||
     secret === undefined ||
     !PAIR_SECRET_RE.test(secret) ||
-    !RELAY_HOST_KEY_RE.test(`${type} ${blob}`)
+    !RELAY_HOST_KEY_RE.test(`${type} ${blob}`) ||
+    mac === undefined ||
+    !/^[0-9a-f]{64}$/.test(mac)
   ) {
+    throw bad();
+  }
+  let set: DenySet;
+  try {
+    set = decodeDeny(deny as string);
+  } catch (e) {
     throw new Error(
-      'not a pairing line: studio relay pair <label> <host> on the lead prints it (studio-pair-1 <label> <secret> <key>)',
+      `the pairing line's deny set: ${(e as Error).message}; copy the whole line again`,
     );
   }
-  return { label, secret, key: `${type} ${blob}` };
+  const p: PairLine = { label, secret, key: `${type} ${blob}`, deny: set };
+  if (!timingSafeEqual(Buffer.from(lineMac(p), 'hex'), Buffer.from(mac, 'hex'))) {
+    throw new Error(
+      'the pairing line was changed on the way (its MAC does not hold): nothing was installed; copy the whole line again',
+    );
+  }
+  return p;
 }
 
 /** The lead's private key for a relay label, in the owner config dir. */
@@ -97,6 +146,8 @@ export interface PendingPair {
   secret: string;
   identityFile: string;
   createdAt: string;
+  /** The deny set the line carried (absent in a pending pairing of an earlier version). */
+  deny?: DenySet;
 }
 
 const pendingFile = (owner: OwnerEnv, label: string) =>
@@ -209,6 +260,8 @@ export interface Pairing {
   key: string;
   secret: string;
   pairedAt: string;
+  /** The digest of the deny set the line carried, which the proof covers. */
+  denyDigest?: string;
 }
 
 /**
@@ -237,7 +290,14 @@ export function readPairings(machine: string): Record<string, Pairing> {
       typeof v.pairedAt === 'string' &&
       !Number.isNaN(Date.parse(v.pairedAt))
     ) {
-      out[label] = { key: v.key, secret: v.secret, pairedAt: v.pairedAt };
+      out[label] = {
+        key: v.key,
+        secret: v.secret,
+        pairedAt: v.pairedAt,
+        ...(typeof v.denyDigest === 'string' && /^[0-9a-f]{64}$/.test(v.denyDigest)
+          ? { denyDigest: v.denyDigest }
+          : {}),
+      };
     }
   }
   return out;
@@ -261,7 +321,7 @@ export function pairProofs(
   if (hostKey === undefined) return [];
   return Object.entries(pairings)
     .filter(([, p]) => now.getTime() - Date.parse(p.pairedAt) <= PAIR_TTL_MS)
-    .map(([label, p]) => ({ label, mac: pairProof(p.secret, hostKey) }));
+    .map(([label, p]) => ({ label, mac: pairProof(p.secret, hostKey, p.denyDigest) }));
 }
 
 /**

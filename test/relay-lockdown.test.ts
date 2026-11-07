@@ -17,6 +17,7 @@ import { relayDoctor } from '../src/relay-lead.js';
 import {
   denyNameDrift,
   entrySpan,
+  gapFix,
   inLocalRange,
   judgeLockdown,
   judgeLockdownAll,
@@ -379,7 +380,7 @@ describe('the check before every relay start', () => {
     const r = judgeLockdownAll(good(), added);
     expect(r?.kind).toBe('held');
     expect(r?.line).toMatch(
-      /^deny\.prefixes \S+ has no firewall rule; deny\.prefixes \S+ has no firewall rule: run studio relay install again, elevated/,
+      /^deny\.prefixes \S+ has no firewall rule; deny\.prefixes \S+ has no firewall rule: on the lead, run studio relay pair <label> --update-deny/,
     );
     expect(r?.line).toContain('2001:db8:9::');
     // The same through the check as the relay account, from the state the active store gives.
@@ -395,7 +396,7 @@ describe('the check before every relay start', () => {
     expect(judgeLockdownAll(good(), added)).toEqual({
       kind: 'held',
       line: expect.stringMatching(
-        /^deny\.ports 6379 has no TCP firewall rule; deny\.ports 6379 has no UDP firewall rule: run studio relay install again/,
+        /^deny\.ports 6379 has no TCP firewall rule; deny\.ports 6379 has no UDP firewall rule: on the lead, run studio relay pair <label> --update-deny/,
       ),
     });
     // A UDP rule gone, or one bound to another account, holds no port.
@@ -562,7 +563,7 @@ describe('the checks of a relay start (relayWindows.check)', () => {
     });
     expect(r.problem).toEqual({
       kind: 'held',
-      line: `deny.hosts nas.example now resolves to ${ipv4(203, 0, 113, 50)}, which no firewall rule holds: run studio relay install again, elevated, so the firewall rules follow the names`,
+      line: `deny.hosts nas.example now resolves to ${ipv4(203, 0, 113, 50)}, which no firewall rule holds: ${gapFix()}`,
     });
   });
 
@@ -731,7 +732,8 @@ describe('studio relay install and setup with and without --no-firewall', () => 
     const off = await run('install', { source: 'fd7a::/48', 'no-firewall': true });
     expect(off.script).not.toContain('LockdownProbe');
     expect(off.script).toContain('UNSAFE (--no-firewall)');
-  });
+    // The first call asks the system for its folders (a PowerShell start on Windows).
+  }, 60_000);
 
   it('setup prints the same lockdown', async () => {
     expect((await run('setup', {})).script).toContain('LockdownProbe $lockSids');
@@ -821,7 +823,7 @@ ${lockdownSection(
       const r = await lockdownProblem(runFile, later);
       expect(r?.kind).toBe('held');
       expect(r?.line).toMatch(
-        /^deny\.prefixes \S+ has no firewall rule; deny\.ports 6379 has no TCP firewall rule; deny\.ports 6379 has no UDP firewall rule: run studio relay install again/,
+        /^deny\.prefixes \S+ has no firewall rule; deny\.ports 6379 has no TCP firewall rule; deny\.ports 6379 has no UDP firewall rule: on the lead, run studio relay pair <label> --update-deny/,
       );
     } finally {
       runPs(

@@ -11,6 +11,7 @@
 // user's password is sealed for the machine (LocalMachine DPAPI) in a file whose ACL lets only the
 // relay account, SYSTEM and administrators read it. Any process of those accounts on this machine
 // can open it; the crew user cannot read the file.
+
 import { posix, win32 } from 'node:path';
 import {
   CREW_ACCOUNT_BODY,
@@ -32,7 +33,8 @@ import {
   POINT_AND_PRINT,
   POINT_AND_PRINT_KEY,
 } from './relay-lockdown.js';
-import { powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
+import { SYS_INIT } from './system-folders-ps.js';
+import { powershellEnv, psQuote, type RunFile, systemFolders } from './windows-sandbox.js';
 
 /** Every path here is a Windows path, also where tests run elsewhere (with POSIX folders). */
 const join = (...parts: string[]): string =>
@@ -44,7 +46,7 @@ const join = (...parts: string[]): string =>
  * above it, only administrators may change.
  */
 export const relayHomeDefault = (env: Record<string, string | undefined>): string =>
-  join(env.ProgramData ?? env.PROGRAMDATA ?? 'C:\\ProgramData', 'Studio', 'relay');
+  join(systemFolders(env).programData, 'Studio', 'relay');
 
 /**
  * The admin-only tree of a relay worker: the copies of Node.js and Studio the forced command runs,
@@ -52,7 +54,7 @@ export const relayHomeDefault = (env: Record<string, string | undefined>): strin
  * administrators write anything here; the relay account reads what it needs.
  */
 export const relayMachineDefault = (env: Record<string, string | undefined>): string =>
-  join(env.ProgramFiles ?? env.PROGRAMFILES ?? 'C:\\Program Files', 'Studio', 'relay');
+  join(systemFolders(env).programFiles, 'Studio', 'relay');
 
 /** The password of the current crew user, sealed for this machine. */
 export const machineCredFile = (machine: string): string => join(machine, 'crew-credential.bin');
@@ -315,17 +317,45 @@ icacls $target /setowner '*S-1-5-32-544' /L /Q | Out-Null`;
 }
 
 /**
+ * PowerShell function `AncestorProblem $path $trusted`: a folder above Studio's own (Program Files,
+ * ProgramData, the drive) must be owned by one of `$trusted` (administrators, SYSTEM,
+ * TrustedInstaller, and where the setup runs the administrator running it), and nobody else may
+ * delete, rename or re-own what lies in it (Delete, DeleteSubdirectoriesAndFiles, ChangePermissions,
+ * TakeOwnership, generic all or write, on the folder itself). Creating new entries stays allowed:
+ * ProgramData lets every user create files and folders by design, and a folder of Studio's made there
+ * before is caught by its owner. Returns the problem, or nothing.
+ */
+export const ANCESTOR_CHECK = String.raw`$ancestorDanger = [int64][Security.AccessControl.FileSystemRights]'Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+$ancestorDanger = $ancestorDanger -bor 0x10000000 -bor 0x40000000
+function AncestorProblem([string]$path, [string[]]$trusted) {
+  $acl = Get-Acl -LiteralPath $path
+  $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+  if ($trusted -notcontains $owner) { return "$path is owned by $owner, not by administrators, SYSTEM or TrustedInstaller" }
+  foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($r.AccessControlType -ne 'Allow') { continue }
+    if (($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+    $sid = $r.IdentityReference.Value
+    if ($trusted -contains $sid) { continue }
+    if (([int64]$r.FileSystemRights -band $ancestorDanger) -ne 0) { return "$path lets $sid delete, rename or re-own what lies in it" }
+  }
+}
+`;
+
+/**
  * The PowerShell functions of the setup that make and check Studio's folders: `SafeFolder` (no
  * reparse point on the way, no foreign owner), `StrictFolder` (a protected DACL built from scratch,
  * never handed down through a reparse point below) and `NoLinksIn` (no reparse point just below a
  * folder). Exported for the Windows CI.
  */
-export const FOLDER_FUNCTIONS = String.raw`$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+export const FOLDER_FUNCTIONS =
+  ANCESTOR_CHECK +
+  String.raw`$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
 # What may own a folder of Studio's before this run: administrators, SYSTEM, TrustedInstaller, or
 # the administrator running this script (who may own what it created on an earlier run).
 $ownerSids = $adminSids + @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
-# Every folder of Studio's, from the drive down: no reparse point anywhere, and none another account
-# owns (a folder planted there before would keep its owner's rights).
+# Every folder of Studio's, from the drive down: no reparse point anywhere, none another account
+# owns (a folder planted there before would keep its owner's rights), and above them none that
+# anyone but administrators could delete, rename or re-own the way out of (AncestorProblem).
 function SafeFolder([string]$path, [string]$top) {
   $walk = $path
   while ($walk) {
@@ -335,6 +365,10 @@ function SafeFolder([string]$path, [string]$top) {
       if ($walk.Length -gt $top.Length -and $walk.StartsWith($top, [StringComparison]::OrdinalIgnoreCase)) {
         $owner = (Get-Acl -LiteralPath $walk).GetOwner([Security.Principal.SecurityIdentifier]).Value
         if ($ownerSids -notcontains $owner) { throw "$walk is owned by $owner, not by administrators: remove it, then run this again" }
+      } else {
+        # Above Studio's folders, up to the drive: only administrators may take the way away.
+        $a = AncestorProblem $walk $ownerSids
+        if ($a) { throw "$($a): Studio's admin-only folders need a way down that only administrators control; fix that folder's owner or ACL, then run this again" }
       }
     }
     $up = Split-Path -Parent $walk
@@ -578,19 +612,71 @@ ${script.slice(first.length)}`;
 }
 
 /**
+ * The elevated script of `studio relay update-deny`: only the firewall rules of the lockdown, from
+ * `lockdown` (the worker's deny list with the lead's additions), for the relay account and the crew
+ * users' group an install made; the deny.hosts names go into the install record for the drift
+ * check. Refused while a relay job runs (the rules are rewritten), and on a machine without an
+ * install.
+ */
+export function relayDenyScript(o: {
+  machine: string;
+  relayUser: string;
+  crewPrefix: string;
+  lockdown: LockdownPlan;
+}): string {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o.relayUser))
+    throw new Error(`not a user name: ${o.relayUser}`);
+  return withSteps(`#Requires -RunAsAdministrator
+$ErrorActionPreference = 'Stop'
+${MACHINE_PATH}$relay = ${psQuote(o.relayUser)}
+$machine = ${psQuote(o.machine)}
+${crewAccountFunctions(o.crewPrefix, { treeSource: brokerPlaces(o.machine).treeSource, treeTemp: brokerPlaces(o.machine).treeTemp })}${relayJobFunctions({ relayUser: o.relayUser, crewPrefix: o.crewPrefix, forceStop: false, what: 'update-deny' })}Step 'sshd paused, and no relay job may run while the rules are rewritten'
+# No lead can start a job while the rules change and the probe retires crew users: sshd stops
+# first, then no job may be running; sshd starts again at the end if it ran before.
+$sshdWas = [string](Get-Service -Name sshd -ErrorAction SilentlyContinue).Status
+Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
+try {
+NoRelayJob
+Step 'the relay account and the group of the crew users of the install'
+$u = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
+if ($null -eq $u -or $u.Description -ne 'Studio relay (SSH, forced command)') { throw "there is no relay account $relay that Studio made here: run studio relay install first" }
+$relaySid = $u.SID.Value
+$group = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
+if ($null -eq $group -or $group.Description -ne $groupDescription) { throw "there is no group of crew users $($prefix)s that Studio made here: run studio relay install first" }
+$groupSid = $group.SID.Value
+Step 'network lockdown'
+${lockdownSection(o.lockdown, '@($relaySid, $groupSid)')}Step 'the install record: the deny.hosts names and their addresses'
+$recordFile = ${psQuote(installRecordFile(o.machine))}
+$rec = Get-Content -Raw -LiteralPath $recordFile | ConvertFrom-Json
+$rec | Add-Member -NotePropertyName lockdownNames -NotePropertyValue (ConvertFrom-Json ${psQuote(JSON.stringify(o.lockdown.names))}) -Force
+$tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+[IO.File]::WriteAllText($tmp, (ConvertTo-Json -Compress -Depth 6 $rec), (New-Object Text.ASCIIEncoding))
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $recordFile" }
+[IO.File]::Replace($tmp, $recordFile, [NullString]::Value)
+icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
+} finally {
+  if ($sshdWas -eq 'Running') { Start-Service -Name sshd }
+}
+`);
+}
+
+/**
  * PowerShell function `SshdConfigSwap $conf $text $mustTest`: the new sshd_config goes to a
  * temporary file beside it, sshd checks that file (`sshd -t -f`, with a throwaway host key when
  * the machine has none yet), and only a config sshd accepts replaces the old one, in one step
  * (`[IO.File]::Replace`, which keeps its ACL). A refused one changes nothing. Without sshd.exe
  * the check is skipped only where `$mustTest` allows it (uninstall: removing lines).
  */
-export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
+export const SSHD_SWAP =
+  `${SYS_INIT}` +
+  String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
   $dir = Split-Path -Parent $conf
   $tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')
   $keyDir = $null
   [IO.File]::WriteAllText($tmp, $text, (New-Object Text.UTF8Encoding $false))
   try {
-    $exe = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
+    $exe = Join-Path ($sys.windows) 'System32\OpenSSH\sshd.exe'
     if (Test-Path -LiteralPath $exe) {
       $sshdArgs = '-t -f "' + $tmp + '"'
       if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
@@ -605,7 +691,7 @@ export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [stri
         $made = Get-Item -LiteralPath $keyDir -Force
         if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
         $key = Join-Path $keyDir 'host_ed25519'
-        $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
+        $kg = Start-Process -FilePath (Join-Path ($sys.windows) 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
         if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
         $sshdArgs += ' -h "' + $key + '"'
       }
@@ -722,8 +808,10 @@ export const installRecordFile = (machine: string): string => join(machine, 'ins
  * there already (an install of an earlier version, which recorded nothing).
  */
 /** The first line of every elevated script: the machine's PATH alone, never a folder of the user's. */
-export const MACHINE_PATH =
-  "# Only the machine's PATH: a folder of the user's PATH is writable without elevation.\n$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')\n";
+export const MACHINE_PATH = `# Only the machine's PATH: a folder of the user's PATH is writable without elevation.
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+# The Windows, Program Files and ProgramData folders from the system, never from the environment.
+${SYS_INIT}`;
 
 const PRIOR_CAPTURE = (
   machine: string,
@@ -792,7 +880,7 @@ function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Mach
 # winget from its package in Program Files (administrators only), never the alias in the user's
 # WindowsApps folder.
 function Winget {
-  $apps = Join-Path $env:ProgramFiles 'WindowsApps'
+  $apps = Join-Path ($sys.programFiles) 'WindowsApps'
   @(Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe' -ErrorAction SilentlyContinue |
     Sort-Object { try { [version]($_.Name.Split('_')[1]) } catch { [version]'0.0' } } -Descending |
     ForEach-Object { Join-Path $_.FullName 'winget.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
@@ -807,7 +895,7 @@ function Need([string]$what, [scriptblock]$have, [string]$id) {
   if (-not (& $have)) { throw "$what is still missing after winget install $id; install it for all users by hand" }
 }
 Step 'prerequisites: Git, Claude Code, the OpenSSH server'
-Need 'Git' { Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
+Need 'Git' { Test-Path -LiteralPath (Join-Path ($sys.programFiles) 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
@@ -856,7 +944,7 @@ KbdInteractiveAuthentication no
 # studio relay end global
 `;
   return `Step 'sshd: its block (checked with sshd -t), the firewall rule, start'
-$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
+$conf = Join-Path ($sys.programData) 'ssh\\sshd_config'
 if (-not (Test-Path -LiteralPath $conf)) {
   # The first start of sshd writes its default config; it stays stopped afterwards.
   Start-Service sshd
