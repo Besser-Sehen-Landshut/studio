@@ -4429,6 +4429,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             link: values.link === true,
             notifications: values.notifications === true,
             ...(deps.launcher === undefined ? {} : { launcher: deps.launcher }),
+            ...(deps.workerPlatform === undefined ? {} : { platform: deps.workerPlatform }),
             stdout,
             stderr,
           });
