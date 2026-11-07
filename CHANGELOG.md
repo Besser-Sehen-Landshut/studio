@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.26.1] - 2026-11-07
+
+Hardening of the Windows crew broker.
+
+### Security
+
+- Windows crew users: the tree deleter is compiled only from an admin-only copy, with its compiler's temporary files in an admin-only folder (native workers: `%ProgramFiles%\Studio crew`, filled by `studio worker windows-setup`; run it again). A process whose owner cannot be read holds every crew user instead of being ignored. The relay broker tasks check the SHA-256 of their shared functions before running them. A quarantine entry that cannot be deleted is skipped after three runs and named in doctor.
+
 ## [0.26.0] - 2026-11-07
 
 A fresh crew user per job on Windows workers.
