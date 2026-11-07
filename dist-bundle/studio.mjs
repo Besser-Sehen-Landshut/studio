@@ -40358,20 +40358,30 @@ function enforceDeny(o2) {
     }
   }
   const hosts = [...new Set((o2.deny.hosts ?? []).map((h2) => h2.toLowerCase()))];
-  return { paths, ports, allowRead, notes, ...hosts.length === 0 ? {} : { hosts } };
+  const prefixes = [...new Set(o2.deny.prefixes ?? [])];
+  return {
+    paths,
+    ports,
+    allowRead,
+    notes,
+    ...hosts.length === 0 ? {} : { hosts },
+    ...prefixes.length === 0 ? {} : { prefixes }
+  };
 }
 function mergeDeny(...lists) {
   const paths = [];
   const ports = [];
   const hosts = [];
+  const prefixes = [];
   for (const l of lists) {
+    for (const p of l?.prefixes ?? []) if (!prefixes.includes(p)) prefixes.push(p);
     for (const p of l?.paths ?? []) if (!paths.includes(p)) paths.push(p);
     for (const p of l?.ports ?? []) if (!ports.includes(p)) ports.push(p);
     for (const h2 of l?.hosts ?? []) {
       if (!hosts.includes(h2.toLowerCase())) hosts.push(h2.toLowerCase());
     }
   }
-  return { paths, ports, hosts };
+  return { paths, ports, hosts, ...prefixes.length === 0 ? {} : { prefixes } };
 }
 
 // src/egress-proxy.ts
@@ -40626,6 +40636,7 @@ async function lockdownFor(o2) {
 var LOCKDOWN_GROUP = "Studio relay lockdown";
 var LOCKDOWN_RULE = "Studio relay lockdown: no local network";
 var SMB_LAN_RULE = "Studio relay lockdown: no SMB to the local network (all users)";
+var lockdownPortsRule = (protocol) => `Studio relay lockdown: denied ports, ${protocol}`;
 var LOCAL_V4 = [
   [10, 0, 0, 0, 8],
   [100, 64, 0, 0, 10],
@@ -40841,7 +40852,7 @@ ${ROUTE_FUNCTIONS}function LockdownRules([string[]]$sids) {
   $routes = @(LocalRoutes)
   New-NetFirewallRule @base -LocalUser $who -DisplayName ${psQuote(LOCKDOWN_RULE)} -RemoteAddress ($lockLocal + $lockHosts + $routes) | Out-Null
   foreach ($p in @('TCP', 'UDP')) {
-    if ($lockPorts.Count -gt 0) { New-NetFirewallRule @base -LocalUser $who -DisplayName "Studio relay lockdown: denied ports, $p" -Protocol $p -RemotePort ([string[]]$lockPorts) | Out-Null }
+    if ($lockPorts.Count -gt 0) { New-NetFirewallRule @base -LocalUser $who -DisplayName $(if ($p -eq 'TCP') { ${psQuote(lockdownPortsRule("TCP"))} } else { ${psQuote(lockdownPortsRule("UDP"))} }) -Protocol $p -RemotePort ([string[]]$lockPorts) | Out-Null }
   }
   # --block-smb-lan: SMB to the local networks for every account, the owner's own shares included.
   if ($lockSmbLan) { New-NetFirewallRule @base -DisplayName ${psQuote(SMB_LAN_RULE)} -Protocol TCP -RemotePort @('445', '139') -RemoteAddress ($lockLocal + $routes) | Out-Null }
@@ -40948,6 +40959,14 @@ foreach ($p in @(Get-NetFirewallProfile -PolicyStore ActiveStore)) { $state.prof
 foreach ($r in @(Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName ${psQuote(LOCKDOWN_RULE)} -ErrorAction SilentlyContinue)) {
   $state.rules += @{ enabled = [string]$r.Enabled; action = [string]$r.Action; direction = [string]$r.Direction; users = [string]($r | Get-NetFirewallSecurityFilter).LocalUser; remote = @(($r | Get-NetFirewallAddressFilter).RemoteAddress | ForEach-Object { [string]$_ }) }
 }
+# The rules of deny.ports, from the active store too: protocol and remote ports as applied.
+$state.ports = @()
+foreach ($name in @(${psQuote(lockdownPortsRule("TCP"))}, ${psQuote(lockdownPortsRule("UDP"))})) {
+  foreach ($r in @(Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName $name -ErrorAction SilentlyContinue)) {
+    $pf = $r | Get-NetFirewallPortFilter
+    $state.ports += @{ protocol = [string]$pf.Protocol; enabled = [string]$r.Enabled; action = [string]$r.Action; direction = [string]$r.Direction; users = [string]($r | Get-NetFirewallSecurityFilter).LocalUser; remote = @($pf.RemotePort | ForEach-Object { [string]$_ }) }
+  }
+}
 $targets = @(${PROBE_FIXED.map(psQuote).join(", ")})
 $v6 = V6Target
 if ($v6) { $targets += $v6 }
@@ -40956,6 +40975,22 @@ $json = & { ${CONNECT_TEST.replace("[Console]::Out.Write((ConvertTo-Json -Compre
 $state.connect = ConvertFrom-Json $json
 [Console]::Out.Write((ConvertTo-Json -Compress -Depth 5 $state))
 `;
+async function lockdownWant(o2) {
+  const plan = await lockdownFor(o2);
+  const fromPrefix = new Set(
+    (o2.deny.prefixes ?? []).flatMap((p) => {
+      const s = entrySpan(p);
+      return s === void 0 ? [] : [spanText(s)];
+    })
+  );
+  return {
+    spans: [
+      ...(o2.deny.prefixes ?? []).map((entry) => ({ entry, from: "deny.prefixes" })),
+      ...plan.hosts.filter((h2) => !fromPrefix.has(h2)).map((entry) => ({ entry, from: "deny.hosts" }))
+    ],
+    ports: plan.ports
+  };
+}
 var asList = (x) => Array.isArray(x) ? x : x === void 0 || x === null ? [] : [x];
 function parseLockdownState(raw) {
   const r = raw;
@@ -40982,11 +41017,60 @@ function parseLockdownState(raw) {
       };
     }),
     routes: asList(r.routes).map(str).filter((x) => x !== ""),
+    ports: asList(r.ports).map((p) => {
+      const q = p;
+      return {
+        protocol: str(q.protocol),
+        enabled: str(q.enabled),
+        action: str(q.action),
+        direction: str(q.direction),
+        users: str(q.users),
+        remote: asList(q.remote).map(str)
+      };
+    }),
     v6: typeof r.v6 === "string" && r.v6 !== "" ? r.v6 : null,
     connect
   };
 }
-function judgeLockdown(s) {
+var portHeld = (entries2, port) => entries2.some((e) => {
+  const m = /^(\d+)(?:-(\d+))?$/.exec(e.trim());
+  if (m === null) return false;
+  const lo = Number(m[1]);
+  const hi = m[2] === void 0 ? lo : Number(m[2]);
+  return port >= lo && port <= hi;
+});
+function lockdownGaps(s, want) {
+  const gaps = [];
+  const rule = s.rules.length === 1 ? s.rules[0] : void 0;
+  const held2 = (rule?.remote ?? []).flatMap((e) => {
+    const x = entrySpan(e);
+    return x === void 0 ? [] : [x];
+  });
+  for (const w of want.spans) {
+    const x = entrySpan(w.entry);
+    if (x === void 0 || !covered(x, held2))
+      gaps.push(`${w.from} ${w.entry} has no firewall rule`);
+  }
+  for (const protocol of ["TCP", "UDP"]) {
+    const rules = s.ports.filter(
+      (r) => r.protocol.toUpperCase() === protocol && r.enabled === "True" && r.action === "Block" && r.direction === "Outbound" && r.users.includes(`;${s.me})`)
+    );
+    for (const p of want.ports) {
+      if (!rules.some((r) => portHeld(r.remote, p))) {
+        gaps.push(`deny.ports ${p} has no ${protocol} firewall rule`);
+      }
+    }
+  }
+  return gaps;
+}
+var GAP_FIX = "run studio relay install again, elevated, so the firewall rules follow the config (an entry from a repository goes into workers.serve.deny of this worker first)";
+function judgeLockdownAll(s, want) {
+  const base2 = judgeLockdownBase(s);
+  if (base2 !== void 0) return { kind: "refused", line: base2 };
+  const gaps = want === void 0 ? [] : lockdownGaps(s, want);
+  return gaps.length === 0 ? void 0 : { kind: "held", line: `${gaps.join("; ")}: ${GAP_FIX}` };
+}
+function judgeLockdownBase(s) {
   const fix = "run studio relay install again, elevated";
   for (const p of s.profiles) {
     if (p.enabled !== "True") {
@@ -41022,7 +41106,7 @@ function judgeLockdown(s) {
   }
   return void 0;
 }
-async function lockdownProblem(run2) {
+async function lockdownProblem(run2, want) {
   const r = await run2(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", LOCKDOWN_STATE],
@@ -41038,9 +41122,12 @@ async function lockdownProblem(run2) {
     state = void 0;
   }
   if (state === void 0) {
-    return "the network lockdown cannot be checked as the relay account; run studio relay install again, elevated";
+    return {
+      kind: "refused",
+      line: "the network lockdown cannot be checked as the relay account; run studio relay install again, elevated"
+    };
   }
-  return judgeLockdown(state);
+  return judgeLockdownAll(state, want);
 }
 var POINT_AND_PRINT_KEY = "HKLM:\\Software\\Policies\\Microsoft\\Windows NT\\Printers\\PointAndPrint";
 var POINT_AND_PRINT = `# Printer drivers: administrators only install them (Point and Print); the spooler stays on.
@@ -64898,8 +64985,12 @@ function relayWindows(o2) {
       if (record2?.firewall === false) {
         warnings2.push(NO_LOCKDOWN);
       } else {
-        const lock = await (o2.lockdown ?? lockdownProblem)(run2);
-        if (lock !== void 0) return { problem: { kind: "refused", line: lock }, warnings: warnings2 };
+        const want = await lockdownWant({
+          deny: { hosts, ports: deny.ports, prefixes: deny.prefixes ?? [] },
+          ...o2.lookup === void 0 ? {} : { lookup: o2.lookup }
+        });
+        const lock = await (o2.lockdown ?? lockdownProblem)(run2, want);
+        if (lock !== void 0) return { problem: lock, warnings: warnings2 };
         const drift = await denyNameDrift({
           denyHosts: hosts,
           recorded: record2?.lockdownNames ?? {},
