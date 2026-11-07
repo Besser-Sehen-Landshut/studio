@@ -12,11 +12,13 @@ import { stringify } from 'yaml';
 import { boardPath, parseBoard } from './board.js';
 import { withTimeout } from './capacity.js';
 import { type ComponentConfig, globProblem, type OwnerEnv, parseConfig } from './config.js';
+import { installCommand, type LeadKind, leadKind, leadMachineProblem } from './lead-machine.js';
 import type { Ports } from './ports.js';
 import { doctorReport } from './secret-command.js';
 import { proposeCi } from './setup-ci.js';
 import { detectCi, safe, snakeKeys } from './setup-ci-command.js';
 import { detectStacks, MONOREPO_DIRS } from './stack.js';
+import { detectPlatform } from './worker-deny.js';
 
 /** One line of the prerequisites list: a failure blocks `--write`, a warning never does. */
 export type Check = {
@@ -261,10 +263,24 @@ async function prerequisites(o: InitOptions): Promise<Check[]> {
   const claudeMs = o.timeouts?.claudeMs ?? CLAUDE_TIMEOUT_MS;
   const doctor = await doctorReport(o);
   const r = doctor.report;
+  // The install commands of this machine, for every fix below.
+  const kind: LeadKind =
+    o.platform === 'darwin'
+      ? 'macos'
+      : o.platform === 'win32'
+        ? 'windows'
+        : o.platform === undefined || o.platform === 'linux'
+          ? leadKind(detectPlatform())
+          : 'other';
   checks.push(
     doctor.gitOk
       ? { name: 'git', status: 'pass', detail: r.git }
-      : { name: 'git', status: 'fail', detail: r.git, fix: 'install git 2.38 or newer' },
+      : {
+          name: 'git',
+          status: 'fail',
+          detail: r.git,
+          fix: `git 2.38 or newer: ${installCommand('git', kind)}`,
+        },
   );
   checks.push(await ghCheck(o.ports, ghMs));
   const env = { PATH: o.env.PATH ?? '', HOME: o.owner.homedir ?? '' };
@@ -283,7 +299,7 @@ async function prerequisites(o: InitOptions): Promise<Check[]> {
           name: 'claude',
           status: 'fail',
           detail: claude.why ?? 'the claude CLI does not run',
-          fix: 'install Claude Code (https://code.claude.com) so that claude is on PATH',
+          fix: `install Claude Code so that claude is on PATH: ${installCommand('claude', kind)}`,
         },
   );
   const node = o.nodeVersion ?? process.versions.node;
@@ -295,7 +311,7 @@ async function prerequisites(o: InitOptions): Promise<Check[]> {
           name: 'node',
           status: 'fail',
           detail: `${node} (too old)`,
-          fix: `install Node.js ${MIN_NODE_MAJOR} or newer`,
+          fix: `Node.js ${MIN_NODE_MAJOR} or newer: ${installCommand('node', kind)}`,
         },
   );
   const platform = o.platform ?? process.platform;
@@ -306,7 +322,8 @@ async function prerequisites(o: InitOptions): Promise<Check[]> {
           name: 'sandbox',
           status: 'fail',
           detail: `Claude Code's sandbox does not run on ${platform}`,
-          fix: 'run the control room on macOS, Linux or WSL2',
+          fix:
+            leadMachineProblem(kind, o.env)?.fix ?? 'run the control room on macOS, Linux or WSL2',
         },
   );
   checks.push(

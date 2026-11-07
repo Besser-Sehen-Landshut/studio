@@ -207,14 +207,14 @@ describe('README relay workers', () => {
     ]) {
       expect(s).toContain(phrase);
     }
-    expect(readme).toContain('| `relay unpair <label> [--home <dir>]`');
+    expect(readme).toContain('| `relay unpair <label> [--home <dir>] [--dry-run]`');
   });
-  it('sets up a Windows relay worker in four steps, the PC in one line, with a troubleshooting table', () => {
+  it('sets up a Windows relay worker in three steps, the PC in one line, with a troubleshooting table', () => {
     const at = readme.indexOf('### Set up a Windows relay worker in 10 minutes');
     expect(at).toBeGreaterThan(0);
     const s = readme.slice(at, readme.indexOf('\n## ', at));
     const steps = [...s.matchAll(/^(\d)\. \*\*/gm)].map((m) => m[1]);
-    expect(steps).toEqual(['1', '2', '3', '4']);
+    expect(steps).toEqual(['1', '2', '3']);
     for (const phrase of [
       'studio relay pair lab worker.example',
       'studio-relay-bootstrap.ps1',

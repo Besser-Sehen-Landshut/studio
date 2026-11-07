@@ -664,9 +664,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       values['dry-run'] !== undefined &&
       cmd !== 'recover' &&
       cmd !== 'release' &&
-      cmd !== 'tick'
+      cmd !== 'tick' &&
+      cmd !== 'setup' &&
+      cmd !== 'account' &&
+      cmd !== 'relay'
     ) {
-      throw new UsageError('--dry-run works with recover, release and tick only');
+      throw new UsageError(
+        '--dry-run works with recover, release, tick, setup, account add and relay pair, install, uninstall and unpair only',
+      );
     }
     if (values.by !== undefined && cmd !== 'release' && cmd !== 'merge') {
       throw new UsageError('--by works with release and merge only');
@@ -4433,6 +4438,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ...(deps.launcher === undefined ? {} : { launcher: deps.launcher }),
             ...(deps.workerPlatform === undefined ? {} : { platform: deps.workerPlatform }),
             ...(deps.which === undefined ? {} : { which: deps.which }),
+            dryRun: values['dry-run'] === true,
             stdout,
             stderr,
           });
@@ -4617,6 +4623,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           isTerminal: deps.isTerminal === true,
           ...(deps.readSecret === undefined ? {} : { readSecret: deps.readSecret }),
           pins: () => projectPins(project, owner),
+          dryRun: values['dry-run'] === true,
           stdout,
           stderr,
         });

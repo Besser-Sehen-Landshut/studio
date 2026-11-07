@@ -9,12 +9,13 @@ import {
   removeAccount,
   setActiveLabel,
 } from './accounts.js';
-import { loadOwnerConfig, type OwnerEnv } from './config.js';
-import { activeParks, readBlocks, readLimits } from './limits.js';
+import { loadOwnerConfig, type OwnerEnv, ownerConfigDir } from './config.js';
+import { activeParks, readBlocks, readLimits, validLabel } from './limits.js';
 import { acquireStateLock } from './paths.js';
 import { DEFAULT_PLUGINS, listedVersions, type PluginPin, pluginCommands } from './plugins.js';
 import type { Ports } from './ports.js';
 import { safe } from './setup-ci-command.js';
+import { setupText } from './setup-text.js';
 import { LAUNCH_LOCK, LAUNCH_LOCK_STALE_MS, labelUsage } from './usage.js';
 
 export interface AccountRow {
@@ -158,10 +159,15 @@ export async function runAccount(o: {
   /** The pinned plugins (studio.yaml over the defaults, extras as the owner allows); may throw. */
   pins?: () => { pins: readonly PluginPin[]; unallowed: readonly string[] };
   readSecret?: (prompt: string) => Promise<string | undefined>;
+  /** Run as a step of `studio setup`: no "next" line of its own. */
+  nested?: boolean;
+  /** `--dry-run`: check the label, say what would be asked and stored; ask and store nothing. */
+  dryRun?: boolean;
   stdout(s: string): void;
   stderr(s: string): void;
 }): Promise<number> {
   const [sub, label, ...extra] = o.args;
+  const t = setupText({ owner: o.owner, env: o.env });
   const ownerOnly = () => {
     if (o.env.STUDIO_ROLE === 'crew' || !o.isTerminal) {
       throw new Error(`account ${sub} is for the owner and needs a terminal; nothing changed`);
@@ -172,6 +178,16 @@ export async function runAccount(o: {
   if (o.env.STUDIO_ROLE === 'crew') throw new Error('this command is not for crew sessions');
 
   if (sub === 'add' && !noLabel()) {
+    if (o.dryRun === true) {
+      if (!validLabel(label as string) || (label as string).startsWith('.')) {
+        throw new Error(`not a label: ${label}; letters, digits, dot, dash or underscore`);
+      }
+      o.stdout(`${t.dryRun}\n`);
+      o.stdout(
+        `${t.would(`ask for the token of claude setup-token at a hidden prompt and store it as ${label} in ${ownerConfigDir(o.owner)} (mode 0600)${listAccounts(o.owner).length === 0 ? ', then install the pinned plugins for crews' : ''}`)}\n`,
+      );
+      return 0;
+    }
     ownerOnly();
     const input = o.readSecret
       ? await o.readSecret('Token from claude setup-token (hidden): ')
@@ -181,9 +197,15 @@ export async function runAccount(o: {
     // The value is never echoed: an error names only what is wrong with it.
     const first = listAccounts(o.owner).length === 0;
     addAccount(o.owner, label as string, input.trim(), o.ports.clock.now());
-    o.stdout(`account ${label} stored${activeLabel(o.owner) === label ? ' and active' : ''}\n`);
+    o.stdout(`${t.accountStored(label as string, activeLabel(o.owner) === label)}\n`);
+    const next = () => {
+      if (o.nested !== true) o.stdout(`${t.accountNext}\n`);
+    };
     // The first account sets up the crew config dir; later ones leave it to setup-plugins.
-    if (!first) return 0;
+    if (!first) {
+      next();
+      return 0;
+    }
     let failed: string | undefined;
     try {
       const p = o.pins?.();
@@ -192,7 +214,10 @@ export async function runAccount(o: {
     } catch (e) {
       failed = (e as Error).message;
     }
-    if (failed === undefined) return 0;
+    if (failed === undefined) {
+      next();
+      return 0;
+    }
     o.stderr(
       `error: plugin setup: ${failed}; the token is stored, run studio account setup-plugins\n`,
     );

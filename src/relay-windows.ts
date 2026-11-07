@@ -450,7 +450,7 @@ $claude = ${psQuote(join(machineConfig(o.machine), 'studio', 'claude'))}
 foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
   if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }`;
-  return `${PRIOR_CAPTURE(o.machine)}${o.install === undefined ? '' : installHead(o.install, o.relayUser, o.crewPrefix)}#Requires -RunAsAdministrator
+  return withSteps(`${PRIOR_CAPTURE(o.machine)}${o.install === undefined ? '' : installHead(o.install, o.relayUser, o.crewPrefix)}#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
@@ -478,12 +478,14 @@ $dataStudio = Split-Path -Parent $home_
 $filesStudio = Split-Path -Parent $machine
 SafeFolder $home_ (Split-Path -Parent $dataStudio)
 SafeFolder $machine (Split-Path -Parent $filesStudio)
+Step 'the relay account and the group of the crew users'
 # The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
 # Studio's group of crew users (one user per job, made and deleted by the broker); what it carries
 # comes once the admin-only copy of Studio is in place.
 $readPaths = ${list(o.readPaths)}
-${crewGroupMake()}# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew users read
+${crewGroupMake()}Step 'the admin-only tree: Node.js and Studio'
+# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew users read
 # Node.js and Studio only.
 $tree = 'ContainerInherit, ObjectInherit'
 $rx = 'ReadAndExecute, Synchronize'
@@ -499,9 +501,12 @@ if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LA
 icacls ${psQuote(machineStudio(o.machine))} /reset /T /C /L /Q | Out-Null
 # The compiler of the tree deleter writes here, as SYSTEM or as this setup: administrators only.
 StrictFolder (Join-Path $machine 'broker\\tmp') @()
+Step "the crew users' group: firewall rule, logon rights, read grants"
 # What the group carries, and the crew users of earlier versions or a crash go: with the tree
 # deleter compiled from the admin-only copy just made.
-${crewGroupFinish()}${lockdownSection(o.lockdown === undefined ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o.lockdown, '@($relaySid, $groupSid)')}${POINT_AND_PRINT}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
+${crewGroupFinish()}Step 'network lockdown and printer drivers'
+${lockdownSection(o.lockdown === undefined ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o.lockdown, '@($relaySid, $groupSid)')}${POINT_AND_PRINT}Step 'the relay home'
+# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
 # the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
 # point among them or just below the home.
 StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
@@ -511,6 +516,7 @@ StrictFolder (Join-Path $home_ 'state') @(@($relaySid, 'ReadAndExecute, CreateFi
 # A crew user's password is sealed for this machine by the fresh broker, per job; one of a crew user
 # of an earlier version goes.
 Remove-Item -LiteralPath ${psQuote(machineCredFile(o.machine))} -Force -ErrorAction SilentlyContinue
+Step 'the broker tasks'
 # The brokers: as SYSTEM, with no argument, each its script in its action, so no file of it exists:
 # one ends every process of the crew users, one also deletes them with their profiles, one also
 # makes the fresh crew user of a job. Only the relay account (and administrators) may start them;
@@ -536,9 +542,8 @@ $action.Arguments = $brokerArgs
 $null = $folder.RegisterTaskDefinition(${psQuote(brokerTasks(o.task)[op])}, $def, 6, 'SYSTEM', $null, 5, $sddl)
 `,
   )
-  .join(
-    '',
-  )}# WebDAV paths (\\\\host@80\\) pass the crew user's firewall rule through the WebClient service:
+  .join('')}Step 'WebClient off, and the record of what was there before'
+# WebDAV paths (\\\\host@80\\) pass the crew user's firewall rule through the WebClient service:
 # it is stopped and disabled.
 Write-Output 'Stopping and disabling the WebClient service (WebDAV), which the crew sandbox does not hold.'
 if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
@@ -546,9 +551,24 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Set-Service -Name WebClient -StartupType Disabled
 }
 # What this machine had before, and what the install did: studio relay uninstall reads it.
-${recordSnippet({ machine: o.machine, spoolerDisabled: o.install?.disableSpooler === true, firewall: o.lockdown !== null })}# The pinned plugins in the crew Claude config dir of the relay home.
+${recordSnippet({ machine: o.machine, spoolerDisabled: o.install?.disableSpooler === true, firewall: o.lockdown !== null })}Step 'the pinned plugins for crews'
+# The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
-${o.install === undefined ? setupTail(block) : installTail(block, o.install)}`;
+${o.install === undefined ? setupTail(block) : installTail(block, o.install)}`);
+}
+
+/**
+ * A setup script with numbered progress: each `Step '<what>'` line prints `[n/N] <what>`, N
+ * counted here, so the owner sees where it is and how far there is to go.
+ */
+export function withSteps(script: string): string {
+  const total = script.split('\n').filter((l) => /^Step ['"]/.test(l)).length;
+  const head = '#Requires -RunAsAdministrator\n';
+  const first = script.startsWith(head) ? head : '';
+  return `${first}$stepTotal = ${total}
+$script:stepAt = 0
+function Step([string]$what) { $script:stepAt++; Write-Output "[$($script:stepAt)/$stepTotal] $what" }
+${script.slice(first.length)}`;
 }
 
 /** Where sshd may be reached from: the Tailscale interface, another interface, or a source range. */
@@ -693,7 +713,8 @@ function SshdOff {
 }
 # No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
 # could plant a link between the two. Every process of the relay account or a crew user counts.
-${relayJobFunctions({ relayUser, crewPrefix, forceStop: i.forceStop === true, what: 'install' })}# Before sshd stops: a running job is refused while the lead can still reach it.
+${relayJobFunctions({ relayUser, crewPrefix, forceStop: i.forceStop === true, what: 'install' })}Step 'no relay job may run while the install works'
+# Before sshd stops: a running job is refused while the lead can still reach it.
 NoRelayJob
 try {
 function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
@@ -705,12 +726,14 @@ function Need([string]$what, [scriptblock]$have, [string]$id) {
   Fresh
   if (-not (& $have)) { throw "$what is still missing after winget install $id; install it by hand" }
 }
+Step 'prerequisites: Git, Claude Code, the OpenSSH server'
 Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
 $priorSshdCapability = @{ name = [string]$ssh.Name; state = [string]$ssh.State }
 if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
+Step 'sshd stopped and closed until everything checked out'
 SshdOff
 # With sshd off no new job starts: once more, for one that started in between.
 NoRelayJob
@@ -752,7 +775,8 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 # studio relay end global
 `;
-  return `$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
+  return `Step 'sshd: its block (checked with sshd -t), the firewall rule, start'
+$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
 if (-not (Test-Path -LiteralPath $conf)) {
   # The first start of sshd writes its default config; it stays stopped afterwards.
   Start-Service sshd

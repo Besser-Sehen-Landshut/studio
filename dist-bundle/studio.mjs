@@ -7854,7 +7854,7 @@ import { parseArgs } from "node:util";
 // src/acceptance.ts
 import { createHash as createHash6 } from "node:crypto";
 import { lstatSync as lstatSync37, readFileSync as readFileSync43 } from "node:fs";
-import { join as join45 } from "node:path";
+import { join as join46 } from "node:path";
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -28603,6 +28603,137 @@ var de_default2 = defineLocale({
     offPane: "Studio-Board ist in dieser Sitzung aus. \u2192 /studio on",
     reaConfirmed: "REA-Installation best\xE4tigt. Sie l\xE4uft beim n\xE4chsten Start, der sie braucht.",
     reaNotConfirmed: "Die REA-Best\xE4tigung lie\xDF sich nicht speichern; studio research install im eigenen Terminal ausf\xFChren.",
+    setup: {
+      step: (k, name, status) => `${k}. ${name}: ${status}`,
+      stepOpen: (k, name) => `${k}. ${name}:`,
+      done: (d) => `erledigt (${d})`,
+      fix: (what) => `   Behebung: ${what}`,
+      dryRun: "Probelauf: nichts wird geschrieben, gespeichert oder ge\xE4ndert.",
+      would: (what) => `   w\xFCrde: ${what}`,
+      next: (what) => `Fertig. Als N\xE4chstes: ${what}`,
+      machine: "Dieser Rechner",
+      windowsWhy: "die Steuerung l\xE4uft nicht unter Windows selbst (Claude Code hat dort keine Sandbox)",
+      windowsFix: 'in PowerShell als Administrator: wsl --install -d Ubuntu-24.04, den PC neu starten, Ubuntu \xF6ffnen und dort studio setup ausf\xFChren (README, "Lead on a Windows PC (WSL2)")',
+      wsl1Why: "das ist WSL1 (oder eine WSL, deren Version sich nicht bestimmen l\xE4sst); die Steuerung braucht WSL2",
+      wsl1Fix: (d) => `in PowerShell: wsl --set-version ${d} 2, dann neu \xF6ffnen und studio setup ausf\xFChren`,
+      otherWhy: "diese Plattform wird nicht unterst\xFCtzt",
+      otherFix: "die Steuerung unter macOS, Linux oder WSL2 betreiben",
+      missing: (label, list2) => `${label}; es fehlt: ${list2}`,
+      nodeOld: (min, have) => `Node.js ${min} (vorhanden: ${have})`,
+      sandboxTools: "bubblewrap und socat (die Sandbox von Claude Code)",
+      tool: (name, command) => `   ${name}: ${command}`,
+      newTerminal: "   Danach ein neues Terminal \xF6ffnen und studio setup erneut ausf\xFChren.",
+      onWindowsDrive: (label, folder, dir) => `${label}; Studios ${folder === "config" ? "Konfigurations" : "Zustands"}ordner ${dir} liegt auf einem Windows-Laufwerk, das keine Dateirechte kennt (Tokens und Schl\xFCssel dort w\xE4ren offen)`,
+      onWindowsDriveFix: "   Behebung: XDG_CONFIG_HOME und XDG_STATE_HOME entfernen oder unter ~ im Linux-Dateisystem setzen, dann studio setup erneut ausf\xFChren.",
+      machineDone: (label, node2) => `erledigt (${label}, git, Node.js ${node2}, claude)`,
+      projectOnWindows: (p) => `   Hinweis: das Projekt ${p} liegt auf einem Windows-Laufwerk; f\xFCr Tempo und genaue Dateirechte ins Linux-Dateisystem (unter ~) klonen.`,
+      sshLater: (command) => `   F\xFCr Relay-Worker sp\xE4ter: ssh und ssh-keygen (${command}).`,
+      gh: "GitHub CLI",
+      ghFix: (fix) => `   Behebung: ${fix}, dann studio setup erneut ausf\xFChren.`,
+      ghInstall: (command) => `${command}, dann gh auth login`,
+      token: "Crew-Token",
+      unusable: "die gespeicherte Datei ist nicht verwendbar",
+      missingWord: "fehlt",
+      tokenText: [
+        "   Crews pushen ihre Branches und \xF6ffnen Pull Requests mit einem eigenen GitHub-Token, nie",
+        "   mit deinem gh-Login. Lege auf GitHub ein fine-grained Token an (Settings, Developer settings,",
+        "   Personal access tokens), beschr\xE4nkt auf die Repositories dieses Projekts, mit",
+        "   contents und pull requests read/write und sonst nichts (keine administration, keine workflows).",
+        "   Studio pr\xFCft es einmal gegen das Repository und speichert es mit Modus 0600; es wird nie angezeigt.",
+        "   Das Token kommt nur in die verdeckte Eingabe."
+      ],
+      noRepo: "   Hier ist kein GitHub-Repository zu finden. Die n\xE4chste Eingabe ist sichtbar; das Token kommt danach.",
+      repoPrompt: "   Repository, an dem die Crews arbeiten, als owner/name (sichtbar): ",
+      repoLooksLikeToken: "   das sieht nach einem Token aus \u2014 nicht gespeichert; bitte owner/name eingeben",
+      repoNotOwnerName: "   das ist kein owner/name; nichts gespeichert",
+      tokenNothing: "   Nichts gespeichert. Token auf GitHub korrigieren, dann studio setup erneut ausf\xFChren.",
+      account: "Claude-Konto f\xFCr Crews",
+      accountWrong: "   studio account list und studio doctor zeigen, was nicht stimmt.",
+      noneStored: "keins gespeichert",
+      accountText: (def) => [
+        "   Crews betreiben Claude Code mit einem eigenen Token, dein eigener Login bleibt deiner. In einem",
+        "   anderen Terminal-Tab ausf\xFChren: claude setup-token",
+        "   Es gibt ein Token aus, das ein Jahr gilt (es braucht einen Pro-, Max-, Ultra-, Team- oder Enterprise-Plan).",
+        `   Zuerst tippst du ein kurzes K\xFCrzel f\xFCr dieses Konto (sichtbar; Enter beh\xE4lt ${def}).`,
+        "   Dann f\xFCgst du das Token in der zweiten Eingabe ein (verdeckt)."
+      ],
+      labelPrompt: (def) => `   Kurzes K\xFCrzel f\xFCr dieses Konto, sichtbar (Enter beh\xE4lt ${def}) [${def}]: `,
+      labelLooksLikeToken: "   das sieht nach einem Token aus \u2014 nicht gespeichert; bitte ein kurzes K\xFCrzel eingeben",
+      labelBad: "   ein K\xFCrzel hat Buchstaben, Ziffern, Punkt, Bindestrich oder Unterstrich und beginnt nicht mit einem Punkt; nichts gespeichert",
+      terminal: "studio in deinem Terminal",
+      noPlugin: "der Ort des Plugins ist nicht bestimmbar; nichts geschrieben",
+      localBinOff: "~/.local/bin steht nicht im PATH.",
+      localBinHelp: [
+        "   Studio \xE4ndert keine Shell-Dateien. ~/.local/bin in der Startdatei deiner Shell zum PATH",
+        "   hinzuf\xFCgen, ein neues Terminal \xF6ffnen und studio setup --link erneut ausf\xFChren."
+      ],
+      untilThen: (command) => `   Bis dahin: ${command}`,
+      shimNote: "   Der Shim findet das Plugin nach einem Update wieder; --link ist kein zweites Mal n\xF6tig.",
+      notAShim: (target) => `${target} ist kein Studio-Shim; nichts ge\xE4ndert.`,
+      notAShimHelp: "   Wegr\xE4umen und studio setup --link erneut ausf\xFChren, oder behalten.",
+      writePrompt: (target) => `   Studio-Shim ${target} schreiben? [J/n] `,
+      updatePrompt: (target) => `   Studio-Shim ${target} aktualisieren? [J/n] `,
+      nothingWritten: (command) => `   nichts geschrieben; bis dahin: ${command}`,
+      wrote: (target) => `   ${target} geschrieben`,
+      notOnPath: "nicht im PATH (Claude Code findet es selbst).",
+      linkHint: "   F\xFCr studio in jedem Terminal: studio setup --link",
+      untilParen: (command) => `   (bis dahin: ${command})`,
+      notifications: "Benachrichtigungen",
+      notifyConfigBad: [
+        "die Owner-Konfiguration ist nicht lesbar; mit studio doctor beheben, dann",
+        "   studio setup --notifications ausf\xFChren. Nichts gespeichert."
+      ],
+      notifyState: (state, transport) => state === "bad" ? "die gespeicherte Datei ist nicht verwendbar" : state === "ok" ? `eingerichtet (${transport}), neu einrichten` : "keine",
+      notifyText: [
+        "   Studio kann dir eine Zeile aufs Telefon schicken, wenn eine Entscheidung ansteht: eine feste",
+        "   Phrase, die Item-ID und den Projektnamen, sonst nichts. Daf\xFCr dient ntfy, ohne Konto: Studio",
+        "   legt ein geheimes Topic an, du abonnierst es in der ntfy-App."
+      ],
+      notifyPrompt: "   ntfy oder none? [ntfy/none] (Enter: ntfy): ",
+      notifyNone: (unchanged) => `   ${unchanged ? "unver\xE4ndert" : "keine Benachrichtigungen"}; sp\xE4ter: studio setup --notifications`,
+      notifyAnswer: "   bitte ntfy oder none antworten; nichts gespeichert",
+      noHttps: "   kein HTTPS-Client in diesem Prozess; nichts gespeichert",
+      notifyOpen: "   Installiere die ntfy-App und \xF6ffne diesen Link:",
+      notifySecret: "   Der Link ist das Geheimnis: wer ihn hat, liest deine Pushes. Studio zeigt ihn nur hier.",
+      notifyReady: "   Enter dr\xFCcken, sobald abonniert (skip bricht ab): ",
+      notifyLater: "   nichts gespeichert; sp\xE4ter: studio setup --notifications",
+      notifyFailed: (why) => `   Test-Push fehlgeschlagen: ${why}; nichts gespeichert`,
+      notifySent: "   Test-Push gesendet; schau aufs Telefon. Topic gespeichert.",
+      research: "Reverse Engineering",
+      researchOptional: "Reverse Engineering (optional)",
+      researchConfigBad: "die Owner-Konfiguration ist nicht lesbar; mit studio doctor beheben. Nichts ge\xE4ndert.",
+      researchDone: (version2, mode, roots) => `erledigt (rea-agents ${version2}, ${mode}, ${roots})`,
+      trustMode: "Vertrauensmodus",
+      strictMode: "strenger Modus",
+      researchSkipped: "\xFCbersprungen; studio setup research richtet es ein",
+      notSetUp: "nicht eingerichtet",
+      researchText: [
+        "   Eine Researcher-Crew kann ausgelieferte Programme mit REA (rea-agents) untersuchen. Studio",
+        "   installiert es einmal in seinen eigenen Zustand, gepr\xFCft gegen die npm-Registry, und gibt ihm",
+        "   einen Analyseordner. REA-Werkzeuge laufen mit deinen Rechten au\xDFerhalb der Sandbox. \xDCberspringe",
+        "   es, wenn du es nie brauchst: Studio fragt wieder, wenn ein Researcher-Item es braucht."
+      ],
+      researchPrompt: "   Jetzt einrichten? [j/N] ",
+      researchLater: "   \xFCbersprungen; sp\xE4ter: studio setup research",
+      researchInstalled: (version2, mode, now) => `   erledigt (rea-agents ${version2}, ${mode}${now ? ", jetzt installiert" : ""})`,
+      finalNext: "Fertig. Jetzt das Projekt in Claude Code \xF6ffnen und /studio:init ausf\xFChren.",
+      pairPc: "Auf dem Windows-PC, in einer PowerShell als Administrator (am PC oder per Remotedesktop, nie per SSH), innerhalb einer Stunde:",
+      pairWhat: (version2) => `Sie installiert Node.js und Git, falls sie fehlen (sie fragt vorher), Studio ${version2} und den Relay-Worker.`,
+      pairHasStudio: (command) => `Ist Studio dort schon installiert: ${command}`,
+      pairThen: (command) => `Danach hier: ${command}`,
+      pairSecret: "Die Zeile enth\xE4lt ein Einmal-Geheimnis: nur auf dem Worker einf\xFCgen.",
+      paired: (label, where, studio, platform2, fp) => `gekoppelt: ${label} ist ${where}, Studio ${studio} auf ${platform2}, Host-Schl\xFCssel festgelegt (${fp}).`,
+      installWebClient: "Studio relay install: stoppt und deaktiviert den Dienst WebClient (WebDAV), den die Crew-Sandbox nicht h\xE4lt.",
+      installStopped: "studio: relay install angehalten; beheben, was es sagt, und erneut ausf\xFChren (es repariert)",
+      hostKey: (fp) => `Fingerabdruck des Host-Schl\xFCssels: ${fp}`,
+      hostKeyUnknown: "Host-Schl\xFCssel: der Schl\xFCssel des OpenSSH-Servers ist nicht lesbar",
+      installNext: (label) => `Fertig. Als N\xE4chstes, auf der Steuerung innerhalb einer Stunde: studio relay pair ${label} --connect`,
+      uninstallNoRecord: "Kein Installationsprotokoll (Installation einer fr\xFCheren Version): Dienste, die Studio gestoppt hat, bleiben, wie sie sind.",
+      uninstallStopped: "studio: relay uninstall angehalten; beheben, was es sagt, und studio relay uninstall erneut ausf\xFChren (es macht dort weiter)",
+      uninstallNext: (leads) => leads.length === 0 ? "Fertig. Als N\xE4chstes: auf der Steuerung diesen Worker aus workers.relay der Owner-Konfiguration entfernen." : `Fertig. Als N\xE4chstes: auf jeder Steuerung ${leads.map((l) => `workers.relay.${l}`).join(", ")} aus der Owner-Konfiguration entfernen.`,
+      accountStored: (label, active) => `Konto ${label} gespeichert${active ? " und aktiv" : ""}`,
+      accountNext: "Fertig. Als N\xE4chstes: studio doctor zeigt das Konto; studio setup erledigt die \xFCbrigen Schritte."
+    },
     push: {
       fix_limit: "Fix-Limit erreicht",
       changes_requested: "\xC4nderungen angefordert",
@@ -28921,6 +29052,137 @@ var strings = {
   offPane: "Studio board is off in this session. \u2192 /studio on",
   reaConfirmed: "REA install confirmed. It installs on the next launch that needs it.",
   reaNotConfirmed: "The REA confirmation could not be saved; run studio research install in your own terminal.",
+  setup: {
+    step: (k, name, status) => `${k}. ${name}: ${status}`,
+    stepOpen: (k, name) => `${k}. ${name}:`,
+    done: (d) => `done (${d})`,
+    fix: (what) => `   Fix: ${what}`,
+    dryRun: "Dry run: nothing is written, stored or changed.",
+    would: (what) => `   would ${what}`,
+    next: (what) => `Done. Next: ${what}`,
+    machine: "This machine",
+    windowsWhy: "the lead does not run on native Windows (Claude Code has no sandbox there)",
+    windowsFix: 'in PowerShell as administrator: wsl --install -d Ubuntu-24.04, restart the PC, open Ubuntu and run studio setup there (README, "Lead on a Windows PC (WSL2)")',
+    wsl1Why: "this is WSL1 (or a WSL whose version cannot be told); the lead needs WSL2",
+    wsl1Fix: (d) => `in PowerShell: wsl --set-version ${d} 2, then open it again and run studio setup`,
+    otherWhy: "this platform is not supported",
+    otherFix: "run the lead on macOS, Linux or WSL2",
+    missing: (label, list2) => `${label}; missing: ${list2}`,
+    nodeOld: (min, have) => `Node.js ${min} (this is ${have})`,
+    sandboxTools: "bubblewrap and socat (Claude Code's sandbox)",
+    tool: (name, command) => `   ${name}: ${command}`,
+    newTerminal: "   Then open a new terminal and run studio setup again.",
+    onWindowsDrive: (label, folder, dir) => `${label}; Studio's ${folder} folder ${dir} is on a Windows drive, which keeps no file modes (tokens and keys there would be open)`,
+    onWindowsDriveFix: "   Fix: unset XDG_CONFIG_HOME and XDG_STATE_HOME, or point them below ~ in the Linux file system, then run studio setup again.",
+    machineDone: (label, node2) => `done (${label}, git, Node.js ${node2}, claude)`,
+    projectOnWindows: (p) => `   Note: the project ${p} is on a Windows drive; clone it into the Linux file system (under ~) for speed and exact file modes.`,
+    sshLater: (command) => `   For relay workers later: ssh and ssh-keygen (${command}).`,
+    gh: "GitHub CLI",
+    ghFix: (fix) => `   Fix: ${fix}, then run studio setup again.`,
+    ghInstall: (command) => `${command}, then gh auth login`,
+    token: "Crew token",
+    unusable: "the stored file is not usable",
+    missingWord: "missing",
+    tokenText: [
+      "   Crews push their branches and open pull requests with a GitHub token of their own, never",
+      "   with your gh login. Create a fine-grained token on GitHub (Settings, Developer settings,",
+      "   Personal access tokens), limited to this project's repositories, with",
+      "   contents and pull requests read/write and nothing else (no administration, no workflows).",
+      "   Studio checks it once against the repository and stores it with mode 0600; it is never shown.",
+      "   The token goes only into the hidden prompt."
+    ],
+    noRepo: "   No GitHub repository found here. The next prompt is visible; the token comes after.",
+    repoPrompt: "   Repository the crews work on, as owner/name (visible): ",
+    repoLooksLikeToken: "   that looks like a token \u2014 it was not stored; enter owner/name",
+    repoNotOwnerName: "   that is not owner/name; nothing stored",
+    tokenNothing: "   Nothing stored. Fix the token on GitHub, then run studio setup again.",
+    account: "Claude account for crews",
+    accountWrong: "   Run studio account list and studio doctor to see what is wrong.",
+    noneStored: "none stored",
+    accountText: (def) => [
+      "   Crews run Claude Code with a token of their own, so your own login stays yours. In another",
+      "   terminal tab run: claude setup-token",
+      "   It prints a token valid for one year (it needs a Pro, Max, Ultra, Team or Enterprise plan).",
+      `   First you type a short label for this account (visible; Enter keeps ${def}).`,
+      "   Then you paste the token at the second prompt (hidden)."
+    ],
+    labelPrompt: (def) => `   Short label for this account, visible (Enter keeps ${def}) [${def}]: `,
+    labelLooksLikeToken: "   that looks like a token \u2014 it was not stored; enter a short label",
+    labelBad: "   a label has letters, digits, dot, dash or underscore and does not start with a dot; nothing stored",
+    terminal: "studio in your terminal",
+    noPlugin: "cannot tell where the plugin is; nothing written",
+    localBinOff: "~/.local/bin is not on your PATH.",
+    localBinHelp: [
+      "   Studio does not edit shell files. Add ~/.local/bin to PATH in your shell's startup",
+      "   file, open a new terminal and run studio setup --link again."
+    ],
+    untilThen: (command) => `   Until then: ${command}`,
+    shimNote: "   The shim finds the plugin again after an update; no need to run --link again.",
+    notAShim: (target) => `${target} is not a Studio shim; nothing changed.`,
+    notAShimHelp: "   Move it away and run studio setup --link again, or keep it.",
+    writePrompt: (target) => `   Write the Studio shim ${target}? [Y/n] `,
+    updatePrompt: (target) => `   Update the Studio shim ${target}? [Y/n] `,
+    nothingWritten: (command) => `   nothing written; until you do: ${command}`,
+    wrote: (target) => `   wrote ${target}`,
+    notOnPath: "not on your PATH (Claude Code finds it on its own).",
+    linkHint: "   To use studio in any terminal: studio setup --link",
+    untilParen: (command) => `   (until then: ${command})`,
+    notifications: "Notifications",
+    notifyConfigBad: [
+      "the owner config cannot be read; fix it with studio doctor, then run",
+      "   studio setup --notifications. Nothing stored."
+    ],
+    notifyState: (state, transport) => state === "bad" ? "the stored file is not usable" : state === "ok" ? `set up (${transport}), set up again` : "none",
+    notifyText: [
+      "   Studio can push one line to your phone when it needs a decision: a fixed phrase, the item",
+      "   id and the project name, nothing else. It uses ntfy, which needs no account: Studio makes a",
+      "   secret topic, you subscribe to it in the ntfy app."
+    ],
+    notifyPrompt: "   ntfy or none? [ntfy/none] (Enter: ntfy): ",
+    notifyNone: (unchanged) => `   ${unchanged ? "unchanged" : "no notifications"}; later: studio setup --notifications`,
+    notifyAnswer: "   answer ntfy or none; nothing stored",
+    noHttps: "   no HTTPS client in this process; nothing stored",
+    notifyOpen: "   Install the ntfy app and open this link:",
+    notifySecret: "   The link is the secret: whoever has it reads your pushes. Studio shows it only here.",
+    notifyReady: "   Press Enter once you subscribed (type skip to stop): ",
+    notifyLater: "   nothing stored; later: studio setup --notifications",
+    notifyFailed: (why) => `   test push failed: ${why}; nothing stored`,
+    notifySent: "   test push sent; check your phone. Topic stored.",
+    research: "Reverse engineering",
+    researchOptional: "Reverse engineering (optional)",
+    researchConfigBad: "the owner config cannot be read; fix it with studio doctor. Nothing changed.",
+    researchDone: (version2, mode, roots) => `done (rea-agents ${version2}, ${mode}, ${roots})`,
+    trustMode: "trust mode",
+    strictMode: "strict mode",
+    researchSkipped: "skipped; studio setup research sets it up",
+    notSetUp: "not set up",
+    researchText: [
+      "   A researcher crew can reverse engineer shipped programs with REA (rea-agents). Studio installs",
+      "   it once into its own state, checked against the npm registry, and grants it one analysis",
+      "   folder. REA tools run with your user rights outside the sandbox. Skip it if you never need it:",
+      "   Studio asks again the first time a researcher item needs it."
+    ],
+    researchPrompt: "   Set it up now? [y/N] ",
+    researchLater: "   skipped; later: studio setup research",
+    researchInstalled: (version2, mode, now) => `   done (rea-agents ${version2}, ${mode}${now ? ", installed now" : ""})`,
+    finalNext: "Done. Now open your project in Claude Code and run /studio:init.",
+    pairPc: "On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH), within the hour:",
+    pairWhat: (version2) => `It installs Node.js and Git if missing (it asks first), Studio ${version2} and the relay worker.`,
+    pairHasStudio: (command) => `With Studio there already: ${command}`,
+    pairThen: (command) => `Then here: ${command}`,
+    pairSecret: "The line holds a single-use secret: paste it on the worker only.",
+    paired: (label, where, studio, platform2, fp) => `paired: ${label} is ${where}, Studio ${studio} on ${platform2}, host key pinned (${fp}).`,
+    installWebClient: "Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.",
+    installStopped: "studio: relay install stopped; fix what it says and run it again (it repairs)",
+    hostKey: (fp) => `host key fingerprint: ${fp}`,
+    hostKeyUnknown: "host key: cannot read the OpenSSH server host key",
+    installNext: (label) => `Done. Next, on the lead within the hour: studio relay pair ${label} --connect`,
+    uninstallNoRecord: "No install record here (an install of an earlier version): services Studio stopped stay as they are.",
+    uninstallStopped: "studio: relay uninstall stopped; fix what it says and run studio relay uninstall again (it goes on where it stopped)",
+    uninstallNext: (leads) => leads.length === 0 ? "Done. Next: on the lead, remove this worker from workers.relay in the owner config." : `Done. Next: on each lead, remove ${leads.map((l) => `workers.relay.${l}`).join(", ")} from the owner config.`,
+    accountStored: (label, active) => `account ${label} stored${active ? " and active" : ""}`,
+    accountNext: "Done. Next: studio doctor shows the account; studio setup runs the other steps."
+  },
   push: {
     fix_limit: "Fix limit reached",
     changes_requested: "Changes requested",
@@ -32053,7 +32315,7 @@ import {
   rmSync as rmSync8,
   writeFileSync as writeFileSync14
 } from "node:fs";
-import { join as join42 } from "node:path";
+import { join as join43 } from "node:path";
 
 // src/capacity.ts
 var DEFAULT_TIMEOUT_MS = 3e4;
@@ -32183,15 +32445,81 @@ async function capacityHoldsTwice(config2, ports, options = {}) {
   return (await readCapacityTwice(config2, ports, options)).ok;
 }
 
+// src/lead-machine.ts
+import { statSync as statSync2 } from "node:fs";
+import { join as join4, resolve as resolve2 } from "node:path";
+function leadKind(p) {
+  if (p.platform === "darwin") return "macos";
+  if (p.platform === "win32") return "windows";
+  if (p.platform !== "linux") return "other";
+  if (p.wsl === "wsl2") return "wsl2";
+  if (p.wsl === "wsl1" || p.wsl === "unknown") return "wsl1";
+  return "linux";
+}
+function installCommand(tool, kind) {
+  const mac3 = kind === "macos";
+  switch (tool) {
+    case "git":
+      return mac3 ? "xcode-select --install" : "sudo apt-get install -y git";
+    case "gh":
+      return mac3 ? "brew install gh" : "sudo apt-get install -y gh";
+    case "node":
+      return mac3 ? "brew install node@24" : "curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs";
+    case "claude":
+      return "curl -fsSL https://claude.ai/install.sh | bash";
+    case "ssh":
+      return mac3 ? "ssh is part of macOS" : "sudo apt-get install -y openssh-client";
+    case "sandbox":
+      return mac3 ? "part of macOS" : "sudo apt-get install -y bubblewrap socat";
+  }
+}
+function leadMachineProblem(kind, env) {
+  if (kind === "windows") {
+    return {
+      why: "the lead does not run on native Windows (Claude Code has no sandbox there)",
+      fix: 'in PowerShell as administrator: wsl --install -d Ubuntu-24.04, restart the PC, open Ubuntu and run studio setup there (README, "Lead on a Windows PC (WSL2)")'
+    };
+  }
+  if (kind === "wsl1") {
+    const distro = env.WSL_DISTRO_NAME ?? "<distribution>";
+    return {
+      why: "this is WSL1 (or a WSL whose version cannot be told); the lead needs WSL2",
+      fix: `in PowerShell: wsl --set-version ${distro} 2, then open it again and run studio setup`
+    };
+  }
+  if (kind === "other")
+    return { why: "this platform is not supported", fix: "run the lead on macOS, Linux or WSL2" };
+  return void 0;
+}
+function onWindowsDrive(path10, p) {
+  if (p.platform !== "linux" || p.wsl === "none") return false;
+  const abs = `${resolve2(path10).replace(/\/+$/, "")}/`;
+  const roots = [p.automountRoot, ...p.windowsMounts ?? []].map(
+    (r) => `${r.replace(/\/+$/, "")}/`
+  );
+  return roots.some((r) => r !== "/" && abs.startsWith(r));
+}
+function onPath(name, env) {
+  for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
+    const file4 = join4(dir, name);
+    try {
+      const st = statSync2(file4);
+      if (st.isFile() && (st.mode & 73) !== 0) return file4;
+    } catch {
+    }
+  }
+  return void 0;
+}
+
 // src/secret-command.ts
 var import_yaml13 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync38, realpathSync as realpathSync10, statSync as statSync6 } from "node:fs";
+import { readFileSync as readFileSync38, realpathSync as realpathSync10, statSync as statSync7 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
-import { join as join40 } from "node:path";
+import { join as join41 } from "node:path";
 
 // src/account-command.ts
 import { chmodSync as chmodSync4, existsSync as existsSync4, mkdirSync as mkdirSync4 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir5 } from "node:os";
 
 // src/accounts.ts
 import { randomBytes as randomBytes4 } from "node:crypto";
@@ -32209,11 +32537,11 @@ import {
   unlinkSync as unlinkSync2,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 
 // src/limits.ts
 import { closeSync as closeSync3, fstatSync as fstatSync2, lstatSync as lstatSync5, openSync as openSync3, readFileSync as readFileSync7, readSync as readSync2 } from "node:fs";
-import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute3, join as join7, resolve as resolve3 } from "node:path";
+import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute3, join as join8, resolve as resolve4 } from "node:path";
 
 // src/paths.ts
 import { spawnSync } from "node:child_process";
@@ -32236,7 +32564,7 @@ import {
   writeSync
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve2, sep as sep2 } from "node:path";
+import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join as join5, relative, resolve as resolve3, sep as sep2 } from "node:path";
 var STATE_PROTECTED_DIRS = [
   "guard",
   "settings",
@@ -32297,12 +32625,12 @@ var STATE_FILES = [
 ];
 function stateBaseFor(opts = {}) {
   const env = opts.env ?? process.env;
-  const base2 = xdgDir(env, "XDG_STATE_HOME") ?? join4(opts.homedir ?? homedir2(), ".local", "state");
-  return join4(base2, "studio");
+  const base2 = xdgDir(env, "XDG_STATE_HOME") ?? join5(opts.homedir ?? homedir2(), ".local", "state");
+  return join5(base2, "studio");
 }
 var OWNER_DIR = "owner";
 function ownerStateRootFor(opts = {}) {
-  return join4(stateBaseFor(opts), OWNER_DIR);
+  return join5(stateBaseFor(opts), OWNER_DIR);
 }
 var PROJECT_ROOT_NAME = /^[0-9a-f]{16}(-.*)?$/;
 function projectStateRoots(base2) {
@@ -32313,7 +32641,7 @@ function projectStateRoots(base2) {
     if (e.code === "ENOENT") return [];
     throw e;
   }
-  return entries2.filter((e) => e.isDirectory() && PROJECT_ROOT_NAME.test(e.name)).map((e) => join4(base2, e.name));
+  return entries2.filter((e) => e.isDirectory() && PROJECT_ROOT_NAME.test(e.name)).map((e) => join5(base2, e.name));
 }
 var LEGACY_MARK = ".legacy-";
 function legacyEntries(ownerRoot) {
@@ -32345,12 +32673,12 @@ function stateDirName(projectReal) {
   return suffix ? `${hash2}-${suffix}` : hash2;
 }
 function realish(p) {
-  const abs = resolve2(p);
+  const abs = resolve3(p);
   let cur = abs;
   const rest = [];
   for (; ; ) {
     try {
-      return join4(realpathSync(cur), ...rest.reverse());
+      return join5(realpathSync(cur), ...rest.reverse());
     } catch {
       const up = dirname2(cur);
       if (up === cur) return abs;
@@ -32361,10 +32689,10 @@ function realish(p) {
 }
 function stateRootFor(projectDir2, opts = {}) {
   const real = projectRealpath(projectDir2);
-  const root = join4(stateBaseFor(opts), stateDirName(real));
+  const root = join5(stateBaseFor(opts), stateDirName(real));
   const platform2 = opts.platform ?? process.platform;
-  const roots = [resolve2(root), realish(root)].map((p) => pathKey(p, platform2));
-  const projects = [resolve2(projectDir2), real].map((p) => pathKey(p, platform2));
+  const roots = [resolve3(root), realish(root)].map((p) => pathKey(p, platform2));
+  const projects = [resolve3(projectDir2), real].map((p) => pathKey(p, platform2));
   if (roots.some((r) => projects.some((pr) => within(r, pr) || within(pr, r)))) {
     throw new Error(
       `state root ${root} must not equal, lie inside or contain the project directory ${projectDir2}`
@@ -32373,7 +32701,7 @@ function stateRootFor(projectDir2, opts = {}) {
   return root;
 }
 function checkStateMarker(root, expected) {
-  const file4 = join4(root, "marker.json");
+  const file4 = join5(root, "marker.json");
   if (isLink(root)) throw new Error(`refusing to use state root ${root}: it is a symlink`);
   const kind = isLink(file4);
   if (kind === void 0) {
@@ -32424,8 +32752,8 @@ function sameOrigin(a2, b) {
 }
 function cloneOriginUrl(clone2) {
   try {
-    if (!lstatSync2(join4(clone2, ".git")).isDirectory()) return void 0;
-    const cfg = join4(clone2, ".git", "config");
+    if (!lstatSync2(join5(clone2, ".git")).isDirectory()) return void 0;
+    const cfg = join5(clone2, ".git", "config");
     if (!lstatSync2(cfg).isFile()) return void 0;
     let inOrigin = false;
     const urls = [];
@@ -32456,7 +32784,7 @@ var isLink = (p) => {
   }
 };
 function segmentsBelow(root, target) {
-  const rel = relative(resolve2(root), resolve2(target));
+  const rel = relative(resolve3(root), resolve3(target));
   if (rel === "") return [];
   if (rel.startsWith("..") || isAbsolute2(rel)) {
     throw new Error(`refusing to use ${target}: it is not inside the state root ${root}`);
@@ -32465,15 +32793,15 @@ function segmentsBelow(root, target) {
 }
 function assertStatePath(root, target) {
   const segs = segmentsBelow(root, target);
-  let cur = resolve2(root);
+  let cur = resolve3(root);
   for (const seg of segs.slice(0, -1)) {
-    cur = join4(cur, seg);
+    cur = join5(cur, seg);
     if (isLink(cur)) throw new Error(`refusing to use ${target}: ${cur} is a symlink`);
   }
   if (segs.length === 0) return;
   let realParent;
   try {
-    realParent = realpathSync(dirname2(resolve2(target)));
+    realParent = realpathSync(dirname2(resolve3(target)));
   } catch {
     return;
   }
@@ -32485,9 +32813,9 @@ function ensureStateDir(root, dir) {
   if (isLink(root)) throw new Error(`refusing to use state root ${root}: it is a symlink`);
   mkdirSync(root, { recursive: true, mode: 448 });
   chmodSync(root, 448);
-  let cur = resolve2(root);
+  let cur = resolve3(root);
   for (const seg of segmentsBelow(root, dir)) {
-    cur = join4(cur, seg);
+    cur = join5(cur, seg);
     assertStatePath(root, cur);
     const link2 = isLink(cur);
     if (link2) throw new Error(`refusing to use ${cur}: it is a symlink`);
@@ -32607,7 +32935,7 @@ async function withBoardLock(root, now, fn) {
   }
 }
 function acquireStateLock(root, name, opts) {
-  const file4 = join4(root, name);
+  const file4 = join5(root, name);
   ensureStateDir(root, dirname2(file4));
   assertStatePath(root, file4);
   const lstat = opts.lstat ?? lstatSync2;
@@ -32686,7 +33014,7 @@ function acquireStateLock(root, name, opts) {
   return void 0;
 }
 function inspectStateLock(root, name, opts) {
-  const file4 = join4(root, name);
+  const file4 = join5(root, name);
   assertStatePath(root, file4);
   let st;
   try {
@@ -32704,7 +33032,7 @@ function inspectStateLock(root, name, opts) {
   return typeof pid === "number" && Number.isInteger(pid) ? { state: "held", pid, silentMs: silent } : { state: "held", silentMs: silent };
 }
 function keys(p, platform2) {
-  const out = [pathKey(resolve2(p), platform2)];
+  const out = [pathKey(resolve3(p), platform2)];
   try {
     out.push(pathKey(realpathSync(p), platform2));
   } catch {
@@ -32720,7 +33048,7 @@ function canonicalToolchainPaths(paths, ctx) {
   } catch {
   }
   const sealed = [
-    ...homeDirs.flatMap((h2) => PROTECTED_HOME_PATHS.map((c3) => join4(h2, c3))),
+    ...homeDirs.flatMap((h2) => PROTECTED_HOME_PATHS.map((c3) => join5(h2, c3))),
     ...ctx.env.CLAUDE_CONFIG_DIR ? [ctx.env.CLAUDE_CONFIG_DIR] : [],
     ...ctx.extraCredentialPaths ?? []
   ].flatMap((p) => keys(p, platform2));
@@ -32737,7 +33065,7 @@ function canonicalToolchainPaths(paths, ctx) {
     } catch {
       fail4("does not exist");
     }
-    const vs = [pathKey(resolve2(path10), platform2), pathKey(real, platform2)];
+    const vs = [pathKey(resolve3(path10), platform2), pathKey(real, platform2)];
     for (const v of vs) {
       if (homes.some((h2) => within(h2, v))) fail4("must not be the home directory or a parent of it");
       const cred = sealed.find((c3) => within(v, c3) || within(c3, v));
@@ -32753,14 +33081,14 @@ function credentialLocations(home, env) {
   const extra = [];
   if (env.GH_CONFIG_DIR) extra.push(env.GH_CONFIG_DIR);
   if (env.XDG_CONFIG_HOME) {
-    extra.push(join4(env.XDG_CONFIG_HOME, "gh"), join4(env.XDG_CONFIG_HOME, "git", "credentials"));
+    extra.push(join5(env.XDG_CONFIG_HOME, "gh"), join5(env.XDG_CONFIG_HOME, "git", "credentials"));
   }
   const owner = { homedir: home, env };
   const ownerDir = ownerConfigDir(owner);
   extra.push(ownerDir, crewTokenFile(owner));
   const realDir = realish(ownerDir);
-  if (realDir !== ownerDir) extra.push(realDir, join4(realDir, basename(crewTokenFile(owner))));
-  return { all: [...CREDENTIAL_PATHS.map((p) => join4(home, p)), ...extra], extra };
+  if (realDir !== ownerDir) extra.push(realDir, join5(realDir, basename(crewTokenFile(owner))));
+  return { all: [...CREDENTIAL_PATHS.map((p) => join5(home, p)), ...extra], extra };
 }
 
 // src/report.ts
@@ -32776,7 +33104,7 @@ import {
   readSync,
   realpathSync as realpathSync2
 } from "node:fs";
-import { join as join5, sep as sep3 } from "node:path";
+import { join as join6, sep as sep3 } from "node:path";
 var ReportError = class extends Error {
   constructor(message) {
     super(message);
@@ -32890,7 +33218,7 @@ function parseReport(text2, item) {
     questions: d.questions
   };
 }
-var NAME_FILE = (stateRoot, id) => join5(stateRoot, "briefs", `${id}.report-name`);
+var NAME_FILE = (stateRoot, id) => join6(stateRoot, "briefs", `${id}.report-name`);
 var REPORT_NAME = /^[A-Z]+-\d+\.[0-9a-f]{32}\.md$/;
 function newReportName(stateRoot, id) {
   const name = `${id}.${randomBytes2(16).toString("hex")}.md`;
@@ -32914,7 +33242,7 @@ function readReportFile(root, file4, notBefore) {
   const unsafe = () => new ReportError(UNSAFE);
   let fd;
   try {
-    const parts = [root, join5(root, ".studio"), join5(root, ".studio", "reports"), file4];
+    const parts = [root, join6(root, ".studio"), join6(root, ".studio", "reports"), file4];
     parts.forEach((p, i2) => {
       const st2 = lstatSync3(p);
       if (st2.isSymbolicLink()) throw unsafe();
@@ -32947,13 +33275,13 @@ function readReportFile(root, file4, notBefore) {
   }
 }
 function readReport(worktree, id, item, opts = {}) {
-  const file4 = join5(worktree, ".studio", "reports", opts.fileName ?? `${id}.md`);
+  const file4 = join6(worktree, ".studio", "reports", opts.fileName ?? `${id}.md`);
   return parseReport(readReportFile(worktree, file4, opts.notBefore), item);
 }
 function readReportText(worktree, id, opts = {}) {
   return readReportFile(
     worktree,
-    join5(worktree, ".studio", "reports", opts.fileName ?? `${id}.md`),
+    join6(worktree, ".studio", "reports", opts.fileName ?? `${id}.md`),
     opts.notBefore
   );
 }
@@ -32966,7 +33294,7 @@ function checkReportHead(report, prHead2) {
 // src/state.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
 import { existsSync as existsSync3, lstatSync as lstatSync4, readFileSync as readFileSync6, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 
 // src/reasons.ts
 var value = (s) => {
@@ -33086,7 +33414,7 @@ function ownerLine(id, title) {
 }
 var defaultWriteFile = (path10, content) => writeFileSync3(path10, content, { mode: 384, flag: "wx" });
 function writeState(stateRoot, snapshot, deps = {}) {
-  const file4 = join6(stateRoot, "state.json");
+  const file4 = join7(stateRoot, "state.json");
   ensureStateDir(stateRoot, stateRoot);
   assertStatePath(stateRoot, file4);
   const tmp = `${file4}.${process.pid}.${randomBytes3(6).toString("hex")}.tmp`;
@@ -33111,7 +33439,7 @@ function existsNoLink(file4) {
   }
 }
 function readCrewRecords(stateRoot) {
-  const file4 = join6(stateRoot, "crew.json");
+  const file4 = join7(stateRoot, "crew.json");
   assertStatePath(stateRoot, file4);
   if (!existsNoLink(file4)) return {};
   let raw;
@@ -33143,7 +33471,7 @@ function updateCrewRecords(stateRoot, mutate, opts = {}) {
         const result = mutate(all);
         writeStateFile(
           stateRoot,
-          join6(stateRoot, "crew.json"),
+          join7(stateRoot, "crew.json"),
           `${JSON.stringify(all, null, 2)}
 `
         );
@@ -33157,7 +33485,7 @@ function updateCrewRecords(stateRoot, mutate, opts = {}) {
   }
 }
 function readMetricEvents(stateRoot) {
-  const file4 = join6(stateRoot, "metrics.jsonl");
+  const file4 = join7(stateRoot, "metrics.jsonl");
   assertStatePath(stateRoot, file4);
   if (!existsSync3(file4) || !existsNoLink(file4)) return [];
   const events = [];
@@ -33394,7 +33722,7 @@ function limitTime(iso, timezone) {
   }
 }
 var usageLimitLine = (label, parkedUntil, timezone) => `usage limit on ${label} until ${limitTime(parkedUntil, timezone)}; nothing launches on it`;
-var limitsFile = (ownerRoot) => join7(ownerRoot, "limits.json");
+var limitsFile = (ownerRoot) => join8(ownerRoot, "limits.json");
 function readLimits(ownerRoot) {
   if (ownerFileHeld(ownerRoot, "limits.json")) return { ok: false };
   return readLimitsFile(limitsFile(ownerRoot));
@@ -33466,7 +33794,7 @@ function readRange(file4, pick4) {
     return void 0;
   }
 }
-var logFile = (stateRoot, id) => join7(stateRoot, "logs", `${id}.jsonl`);
+var logFile = (stateRoot, id) => join8(stateRoot, "logs", `${id}.jsonl`);
 function parsedEvent(line4) {
   try {
     const ev = JSON.parse(line4);
@@ -33533,7 +33861,7 @@ function hasReport(stateRoot, id) {
   try {
     const name = reportName(stateRoot, id);
     if (name === void 0) return false;
-    return lstatSync5(join7(stateRoot, "clones", id, ".studio", "reports", name)).isFile();
+    return lstatSync5(join8(stateRoot, "clones", id, ".studio", "reports", name)).isFile();
   } catch {
     return false;
   }
@@ -33558,7 +33886,7 @@ function backToReady(project, id, note, now, by) {
 async function reconcileLimits(o2) {
   const { project, stateRoot, ownerRoot, ports } = o2;
   const result = { stopped: [], errors: [] };
-  const crewFile = join7(stateRoot, "crew.json");
+  const crewFile = join8(stateRoot, "crew.json");
   if (!exists(crewFile) && !exists(limitsFile(ownerRoot))) return result;
   const now = ports.clock.now();
   const unreadable = () => result.errors.push(
@@ -33732,7 +34060,7 @@ function scanLogForBlock(stateRoot, id, from) {
   }
   return retry;
 }
-var blocksFile = (ownerRoot) => join7(ownerRoot, "blocks.json");
+var blocksFile = (ownerRoot) => join8(ownerRoot, "blocks.json");
 var BLOCK_REASON = /^[a-z_]{1,64}$/;
 function parseBlock(raw) {
   if (!isObject2(raw) || Object.keys(raw).length !== 3) return void 0;
@@ -33813,7 +34141,7 @@ async function crewProcess(rec, ports) {
 }
 function boardOfRoot(root) {
   try {
-    const file4 = join7(root, "marker.json");
+    const file4 = join8(root, "marker.json");
     if (!lstatSync5(file4).isFile()) return void 0;
     const marker = JSON.parse(readFileSync7(file4, "utf8"));
     const project = isObject2(marker) ? marker.projectRealpath : void 0;
@@ -33915,7 +34243,7 @@ async function reconcileBlocks(o2) {
   const { project, stateRoot, ownerRoot, ports } = o2;
   const result = { stopped: [], errors: [], lockFailed: false };
   const first = readBlocks(ownerRoot);
-  if (first.ok && first.blocks.length === 0 && !exists(join7(stateRoot, "crew.json"))) return result;
+  if (first.ok && first.blocks.length === 0 && !exists(join8(stateRoot, "crew.json"))) return result;
   const now = ports.clock.now();
   const lock = acquireStateLock(ownerRoot, "blocks.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
   if (!lock) {
@@ -33941,7 +34269,7 @@ async function reconcileBlocks(o2) {
     const after2 = readBlocks(ownerRoot);
     if (!after2.ok || after2.blocks.length > 0) {
       for (const root of projectStateRoots(dirname3(ownerRoot))) {
-        if (resolve3(root) === resolve3(stateRoot) || !exists(join7(root, "crew.json"))) continue;
+        if (resolve4(root) === resolve4(stateRoot) || !exists(join8(root, "crew.json"))) continue;
         try {
           await stopCrewsOf({ ...phase, root, board: boardOfRoot(root), other: true });
         } catch (e) {
@@ -33995,10 +34323,10 @@ function clearBlocks(ownerRoot, label, now) {
 }
 
 // src/accounts.ts
-var accountsDir = (o2) => join8(ownerConfigDir(o2), "tokens");
-var accountFile = (o2, label) => join8(accountsDir(o2), `${label}.json`);
-var activeFile = (o2) => join8(accountsDir(o2), "active");
-var crewClaudeDir = (o2) => join8(ownerConfigDir(o2), "claude");
+var accountsDir = (o2) => join9(ownerConfigDir(o2), "tokens");
+var accountFile = (o2, label) => join9(accountsDir(o2), `${label}.json`);
+var activeFile = (o2) => join9(accountsDir(o2), "active");
+var crewClaudeDir = (o2) => join9(ownerConfigDir(o2), "claude");
 var TOKEN_LIFETIME_DAYS = 365;
 var EXPIRY_WARNING_DAYS = 30;
 var DAY_MS = 864e5;
@@ -34169,11 +34497,11 @@ import {
   readdirSync as readdirSync4,
   readFileSync as readFileSync9,
   renameSync as renameSync5,
-  statSync as statSync2,
+  statSync as statSync3,
   unlinkSync as unlinkSync3,
   writeFileSync as writeFileSync5
 } from "node:fs";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 
 // src/setup-ci.ts
 var import_yaml6 = __toESM(require_dist(), 1);
@@ -34570,7 +34898,7 @@ function assertPrimaryRepo(primary) {
   return primary;
 }
 function readWorkflows(project) {
-  const dir = join9(project, ...WORKFLOW_DIR);
+  const dir = join10(project, ...WORKFLOW_DIR);
   const rel = WORKFLOW_DIR.join("/");
   const files = [];
   const errors = [];
@@ -34589,7 +34917,7 @@ function readWorkflows(project) {
   for (const name of yaml) {
     const path10 = `${rel}/${name}`;
     try {
-      files.push({ path: path10, text: readFileSync9(join9(dir, name), "utf8") });
+      files.push({ path: path10, text: readFileSync9(join10(dir, name), "utf8") });
     } catch (e) {
       errors.push(`${path10}: cannot read file (${e.code ?? "error"})`);
     }
@@ -34630,7 +34958,7 @@ function applyCi(doc, ci) {
 function writeAtomic(file4, text2) {
   const tmp = `${file4}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
   try {
-    writeFileSync5(tmp, text2, { flag: "wx", mode: statSync2(file4).mode & 511 });
+    writeFileSync5(tmp, text2, { flag: "wx", mode: statSync3(file4).mode & 511 });
     renameSync5(tmp, file4);
   } catch (e) {
     try {
@@ -34670,7 +34998,7 @@ async function detectCi(project, primary, ports, current, timeoutMs) {
   };
 }
 async function runSetupCi(o2) {
-  const file4 = join9(o2.project, ".studio", "studio.yaml");
+  const file4 = join10(o2.project, ".studio", "studio.yaml");
   let text2;
   try {
     text2 = readFileSync9(file4, "utf8");
@@ -34734,25 +35062,72 @@ async function runSetupCi(o2) {
   return errors.length > 0 ? 1 : 0;
 }
 
+// src/claude-language.ts
+import { lstatSync as lstatSync7, readFileSync as readFileSync10 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { isAbsolute as isAbsolute4, join as join11 } from "node:path";
+var MAX_BYTES = 1024 * 1024;
+function languageIn2(file4) {
+  try {
+    const st = lstatSync7(file4);
+    if (!st.isFile() || st.size > MAX_BYTES) return void 0;
+    const raw = JSON.parse(readFileSync10(file4, "utf8"));
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+    const language = raw.language;
+    return typeof language === "string" && language.trim() !== "" ? language : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function claudeLanguage(owner = {}, projectDir2) {
+  const env = owner.env ?? process.env;
+  const configDir = env.CLAUDE_CONFIG_DIR !== void 0 && isAbsolute4(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : join11(owner.homedir ?? homedir3(), ".claude");
+  const files = [
+    ...projectDir2 === void 0 ? [] : [
+      join11(projectDir2, ".claude", "settings.local.json"),
+      join11(projectDir2, ".claude", "settings.json")
+    ],
+    join11(configDir, "settings.json")
+  ];
+  for (const file4 of files) {
+    const language = languageIn2(file4);
+    if (language !== void 0) return language;
+  }
+  return void 0;
+}
+
+// src/setup-text.ts
+function setupText(o2) {
+  let override;
+  try {
+    override = loadOwnerConfig(o2.owner).notify?.language;
+  } catch {
+    override = void 0;
+  }
+  return stringsFor(
+    resolveLang({ override, setting: claudeLanguage(o2.owner, o2.project), env: o2.env })
+  ).setup;
+}
+
 // src/usage.ts
-import { lstatSync as lstatSync8, readFileSync as readFileSync11 } from "node:fs";
-import { dirname as dirname5, join as join10 } from "node:path";
+import { lstatSync as lstatSync9, readFileSync as readFileSync12 } from "node:fs";
+import { dirname as dirname5, join as join12 } from "node:path";
 
 // src/credentials.ts
 import { randomBytes as randomBytes6 } from "node:crypto";
 import {
   chmodSync as chmodSync3,
-  lstatSync as lstatSync7,
+  lstatSync as lstatSync8,
   mkdirSync as mkdirSync3,
-  readFileSync as readFileSync10,
+  readFileSync as readFileSync11,
   realpathSync as realpathSync3,
   renameSync as renameSync6,
-  statSync as statSync3,
+  statSync as statSync4,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync6
 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { dirname as dirname4, isAbsolute as isAbsolute4, sep as sep4 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { dirname as dirname4, isAbsolute as isAbsolute5, sep as sep4 } from "node:path";
 var PROVIDER_TIMEOUT_MS = 3e4;
 var PROVIDER_MAX_BYTES = 64 * 1024;
 var fail = (what) => {
@@ -34799,10 +35174,10 @@ function checkCredentialCommand(path10, owner) {
   const refuse2 = (why) => {
     throw new Error(`crew_credential_command ${path10} ${why}`);
   };
-  if (!isAbsolute4(path10)) refuse2("must be an absolute path");
+  if (!isAbsolute5(path10)) refuse2("must be an absolute path");
   let st;
   try {
-    st = lstatSync7(path10);
+    st = lstatSync8(path10);
   } catch {
     throw new Error(`crew_credential_command ${path10} must be a regular file`);
   }
@@ -34812,14 +35187,14 @@ function checkCredentialCommand(path10, owner) {
   if ((st.mode & 64) === 0) refuse2("must be executable");
 }
 function checkProviderConfigDir(dir, owner) {
-  if (!isAbsolute4(dir)) return fail("config dir must be an absolute path");
+  if (!isAbsolute5(dir)) return fail("config dir must be an absolute path");
   let real = "";
   let ownerReal = "";
   let st;
   try {
     real = realpathSync3(dir);
     ownerReal = realpathSync3(ownerConfigDir(owner));
-    st = statSync3(real);
+    st = statSync4(real);
   } catch {
     return fail("config dir must be an existing directory");
   }
@@ -34833,8 +35208,8 @@ function checkProviderConfigDir(dir, owner) {
 function readSettings(file4) {
   let text2;
   try {
-    if (!statSync3(file4).isFile()) return { problem: `${file4} is not a regular file` };
-    text2 = readFileSync10(file4, "utf8");
+    if (!statSync4(file4).isFile()) return { problem: `${file4} is not a regular file` };
+    text2 = readFileSync11(file4, "utf8");
   } catch (e) {
     return e.code === "ENOENT" ? {} : { problem: `${file4} cannot be read` };
   }
@@ -34875,7 +35250,7 @@ function readCrewTokenFile(owner) {
 function readOwnerSecret(file4, owner) {
   let st;
   try {
-    st = lstatSync7(file4);
+    st = lstatSync8(file4);
   } catch (e) {
     if (e.code === "ENOENT") return { kind: "absent" };
     return { kind: "bad", why: `${file4} cannot be read` };
@@ -34886,7 +35261,7 @@ function readOwnerSecret(file4, owner) {
     return { kind: "bad", why: `${file4} has a mode wider than 0600` };
   }
   try {
-    return { kind: "ok", text: readFileSync10(file4, "utf8") };
+    return { kind: "ok", text: readFileSync11(file4, "utf8") };
   } catch {
     return { kind: "bad", why: `${file4} cannot be read` };
   }
@@ -34911,7 +35286,7 @@ function writeOwnerSecret(file4, content) {
   const parent = dirname4(file4);
   mkdirSync3(dirname4(parent), { recursive: true, mode: 448 });
   try {
-    if (lstatSync7(parent).isSymbolicLink()) {
+    if (lstatSync8(parent).isSymbolicLink()) {
       throw new Error(`refusing to use ${parent}: it is a symlink`);
     }
   } catch (e) {
@@ -34935,7 +35310,7 @@ async function runCredentialProvider(command, ctx, ports, owner) {
   checkCredentialCommand(command, owner);
   const penv = owner.env ?? process.env;
   const env = {
-    HOME: owner.homedir ?? homedir3(),
+    HOME: owner.homedir ?? homedir4(),
     STUDIO_ITEM: ctx.item,
     STUDIO_ROLE: ctx.role,
     STUDIO_EXCLUDE: ctx.exclude.join(",")
@@ -35014,20 +35389,20 @@ function dayKey(now, timezone) {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 var isObject3 = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-var usageFile = (ownerRoot) => join10(ownerRoot, "usage.json");
+var usageFile = (ownerRoot) => join12(ownerRoot, "usage.json");
 function readUsage(ownerRoot) {
   if (ownerFileHeld(ownerRoot, "usage.json")) return { ok: false };
   return readUsageFile(usageFile(ownerRoot));
 }
 function readUsageFile(file4) {
   try {
-    if (!lstatSync8(file4).isFile()) return { ok: false };
+    if (!lstatSync9(file4).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, days: {} } : { ok: false };
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync11(file4, "utf8"));
+    raw = JSON.parse(readFileSync12(file4, "utf8"));
   } catch {
     return { ok: false };
   }
@@ -35079,11 +35454,11 @@ function runningPerLabel(ownerRoot, ports) {
   return out;
 }
 function relayRunningLabels(stateRoot) {
-  const f3 = join10(stateRoot, "relay.json");
+  const f3 = join12(stateRoot, "relay.json");
   let text2;
   try {
-    if (!lstatSync8(f3).isFile()) return [DEFAULT_LABEL];
-    text2 = readFileSync11(f3, "utf8");
+    if (!lstatSync9(f3).isFile()) return [DEFAULT_LABEL];
+    text2 = readFileSync12(f3, "utf8");
   } catch (e) {
     return e.code === "ENOENT" ? [] : [DEFAULT_LABEL];
   }
@@ -35228,7 +35603,7 @@ function pluginEnv(owner, env) {
   const dir = crewClaudeDir(owner);
   const runEnv = {
     CLAUDE_CONFIG_DIR: dir,
-    HOME: owner.homedir ?? homedir4()
+    HOME: owner.homedir ?? homedir5()
   };
   if (env.PATH !== void 0) runEnv.PATH = env.PATH;
   return { dir, runEnv };
@@ -35277,6 +35652,7 @@ ${r.stderr}`);
 }
 async function runAccount(o2) {
   const [sub, label, ...extra] = o2.args;
+  const t = setupText({ owner: o2.owner, env: o2.env });
   const ownerOnly = () => {
     if (o2.env.STUDIO_ROLE === "crew" || !o2.isTerminal) {
       throw new Error(`account ${sub} is for the owner and needs a terminal; nothing changed`);
@@ -35287,15 +35663,34 @@ async function runAccount(o2) {
   const noLabel = () => label === void 0 || extra.length > 0;
   if (o2.env.STUDIO_ROLE === "crew") throw new Error("this command is not for crew sessions");
   if (sub === "add" && !noLabel()) {
+    if (o2.dryRun === true) {
+      if (!validLabel(label) || label.startsWith(".")) {
+        throw new Error(`not a label: ${label}; letters, digits, dot, dash or underscore`);
+      }
+      o2.stdout(`${t.dryRun}
+`);
+      o2.stdout(
+        `${t.would(`ask for the token of claude setup-token at a hidden prompt and store it as ${label} in ${ownerConfigDir(o2.owner)} (mode 0600)${listAccounts(o2.owner).length === 0 ? ", then install the pinned plugins for crews" : ""}`)}
+`
+      );
+      return 0;
+    }
     ownerOnly();
     const input2 = o2.readSecret ? await o2.readSecret("Token from claude setup-token (hidden): ") : void 0;
     if (input2 === void 0)
       throw new Error("account add needs a terminal for hidden input; nothing stored");
     const first = listAccounts(o2.owner).length === 0;
     addAccount(o2.owner, label, input2.trim(), o2.ports.clock.now());
-    o2.stdout(`account ${label} stored${activeLabel(o2.owner) === label ? " and active" : ""}
+    o2.stdout(`${t.accountStored(label, activeLabel(o2.owner) === label)}
 `);
-    if (!first) return 0;
+    const next = () => {
+      if (o2.nested !== true) o2.stdout(`${t.accountNext}
+`);
+    };
+    if (!first) {
+      next();
+      return 0;
+    }
     let failed2;
     try {
       const p = o2.pins?.();
@@ -35305,7 +35700,10 @@ async function runAccount(o2) {
     } catch (e) {
       failed2 = e.message;
     }
-    if (failed2 === void 0) return 0;
+    if (failed2 === void 0) {
+      next();
+      return 0;
+    }
     o2.stderr(
       `error: plugin setup: ${failed2}; the token is stored, run studio account setup-plugins
 `
@@ -35391,8 +35789,8 @@ async function runAccount(o2) {
 // src/cache.ts
 import { execFile } from "node:child_process";
 import { randomBytes as randomBytes7 } from "node:crypto";
-import { lstatSync as lstatSync9, readdirSync as readdirSync5, readFileSync as readFileSync12, renameSync as renameSync7, rmSync as rmSync4 } from "node:fs";
-import { join as join11 } from "node:path";
+import { lstatSync as lstatSync10, readdirSync as readdirSync5, readFileSync as readFileSync13, renameSync as renameSync7, rmSync as rmSync4 } from "node:fs";
+import { join as join13 } from "node:path";
 
 // src/held.ts
 var HeldError = class extends Error {
@@ -35418,16 +35816,16 @@ var DAY_MS2 = 864e5;
 var SEED_TIMEOUT_MS = 10 * 6e4;
 var ID_RE = /^[A-Z]+-\d+$/;
 var SHA_RE2 = /^[0-9a-f]{40}$/;
-var cacheDir = (stateRoot) => join11(stateRoot, CACHE_DIR);
-var seedsDir = (stateRoot) => join11(cacheDir(stateRoot), "seeds");
+var cacheDir = (stateRoot) => join13(stateRoot, CACHE_DIR);
+var seedsDir = (stateRoot) => join13(cacheDir(stateRoot), "seeds");
 var runFile = (stateRoot, id) => {
   if (!ID_RE.test(id)) throw new Error(`invalid item id ${JSON.stringify(id)}`);
-  return join11(cacheDir(stateRoot), "runs", `${id}.json`);
+  return join13(cacheDir(stateRoot), "runs", `${id}.json`);
 };
 var isObject4 = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 function lstatOrUndefined(p) {
   try {
-    return lstatSync9(p);
+    return lstatSync10(p);
   } catch {
     return void 0;
   }
@@ -35438,17 +35836,17 @@ var validDate = (v) => typeof v === "string" && !Number.isNaN(Date.parse(v));
 function realDirBelow(base2, ...segs) {
   let cur = base2;
   for (const seg of segs) {
-    cur = join11(cur, seg);
+    cur = join13(cur, seg);
     if (!isRealDir(cur)) return void 0;
   }
   return cur;
 }
 function readCacheMeta(stateRoot) {
-  const file4 = join11(cacheDir(stateRoot), META);
+  const file4 = join13(cacheDir(stateRoot), META);
   if (!isRealDir(seedsDir(stateRoot)) || !isRealFile(file4)) return void 0;
   let raw;
   try {
-    raw = JSON.parse(readFileSync12(file4, "utf8"));
+    raw = JSON.parse(readFileSync13(file4, "utf8"));
   } catch {
     return void 0;
   }
@@ -35469,7 +35867,7 @@ function readCacheMeta(stateRoot) {
   };
 }
 function writeMeta(stateRoot, meta3) {
-  writeStateFile(stateRoot, join11(cacheDir(stateRoot), META), `${JSON.stringify(meta3, null, 2)}
+  writeStateFile(stateRoot, join13(cacheDir(stateRoot), META), `${JSON.stringify(meta3, null, 2)}
 `);
 }
 function cowCopyArgs(platform2, src, dst) {
@@ -35508,13 +35906,13 @@ function diskBytes(path10) {
   } catch {
     return total;
   }
-  for (const name of names) total += diskBytes(join11(path10, name));
+  for (const name of names) total += diskBytes(join13(path10, name));
   return total;
 }
 function cacheSteps(dir) {
   const steps = [];
-  if (isRealFile(join11(dir, "Cargo.toml"))) {
-    const locked = isRealFile(join11(dir, "Cargo.lock")) ? " --locked" : "";
+  if (isRealFile(join13(dir, "Cargo.toml"))) {
+    const locked = isRealFile(join13(dir, "Cargo.lock")) ? " --locked" : "";
     steps.push(
       { command: `cargo fetch${locked}`, seeds: ["cargo-registry", "cargo-git"] },
       {
@@ -35523,12 +35921,12 @@ function cacheSteps(dir) {
       }
     );
   }
-  if (isRealFile(join11(dir, "pnpm-lock.yaml"))) {
+  if (isRealFile(join13(dir, "pnpm-lock.yaml"))) {
     steps.push({
       command: "pnpm install --frozen-lockfile --ignore-scripts",
       seeds: ["pnpm-store"]
     });
-  } else if (isRealFile(join11(dir, "package-lock.json"))) {
+  } else if (isRealFile(join13(dir, "package-lock.json"))) {
     steps.push({ command: "npm ci --ignore-scripts", seeds: ["npm-cache"] });
   }
   return steps;
@@ -35545,7 +35943,7 @@ function seedPlaces(clone2, homeDir) {
 }
 var cacheEnv = (homeDir) => ({
   // pnpm reads PNPM_CONFIG_* over pnpm-workspace.yaml and .npmrc.
-  PNPM_CONFIG_STORE_DIR: join11(homeDir, ".pnpm-store")
+  PNPM_CONFIG_STORE_DIR: join13(homeDir, ".pnpm-store")
 });
 var NONCE_RE = /^[0-9a-f]{32}$/;
 var cacheRunNonce = () => randomBytes7(16).toString("hex");
@@ -35564,22 +35962,22 @@ function cloneHead(clone2) {
   const read3 = (p) => {
     if (!isRealFile(p)) return void 0;
     try {
-      return readFileSync12(p, "utf8");
+      return readFileSync13(p, "utf8");
     } catch {
       return void 0;
     }
   };
-  const head = read3(join11(git2, "HEAD"))?.trim();
+  const head = read3(join13(git2, "HEAD"))?.trim();
   if (head === void 0) return void 0;
   if (SHA_RE2.test(head)) return head;
   const ref = /^ref: (refs\/heads\/[A-Za-z0-9._/-]+)$/.exec(head)?.[1];
   if (ref === void 0 || ref.split("/").includes("..")) return void 0;
   const segs = ref.split("/");
   if (realDirBelow(git2, ...segs.slice(0, -1)) !== void 0) {
-    const loose = read3(join11(git2, ...segs))?.trim();
+    const loose = read3(join13(git2, ...segs))?.trim();
     if (loose !== void 0) return SHA_RE2.test(loose) ? loose : void 0;
   }
-  for (const line4 of (read3(join11(git2, "packed-refs")) ?? "").split("\n")) {
+  for (const line4 of (read3(join13(git2, "packed-refs")) ?? "").split("\n")) {
     const m = /^([0-9a-f]{40}) (\S+)$/.exec(line4.trim());
     if (m && m[2] === ref) return m[1];
   }
@@ -35589,7 +35987,7 @@ function readCacheRun(stateRoot, id) {
   const file4 = runFile(stateRoot, id);
   if (!isRealFile(file4)) return void 0;
   try {
-    const raw = JSON.parse(readFileSync12(file4, "utf8"));
+    const raw = JSON.parse(readFileSync13(file4, "utf8"));
     if (!isObject4(raw) || raw.item !== id || typeof raw.sha !== "string" || !SHA_RE2.test(raw.sha) || !Array.isArray(raw.commands) || !raw.commands.every((c3) => typeof c3 === "string") || !validDate(raw.startedAt) || typeof raw.nonce !== "string" || !NONCE_RE.test(raw.nonce)) {
       return void 0;
     }
@@ -35610,14 +36008,14 @@ async function seedCrew(o2) {
   const places = seedPlaces(o2.clone, o2.homeDir);
   const seeded = [];
   for (const seed of meta3.seeds) {
-    const src = join11(seedsDir(o2.stateRoot), seed);
+    const src = join13(seedsDir(o2.stateRoot), seed);
     if (!isRealDir(src)) continue;
-    if (seed === "cargo-target" && !(o2.freshClone && isRealFile(join11(o2.clone, "Cargo.toml")))) {
+    if (seed === "cargo-target" && !(o2.freshClone && isRealFile(join13(o2.clone, "Cargo.toml")))) {
       continue;
     }
     const [base2, ...segs] = places[seed];
-    const parent = ensureStateDir(o2.stateRoot, join11(base2, ...segs.slice(0, -1)));
-    const dst = join11(parent, segs.at(-1));
+    const parent = ensureStateDir(o2.stateRoot, join13(base2, ...segs.slice(0, -1)));
+    const dst = join13(parent, segs.at(-1));
     if (await copyInto(o2.stateRoot, o2.cow, src, dst, SEED_TIMEOUT_MS)) seeded.push(seed);
   }
   try {
@@ -35641,7 +36039,7 @@ async function publishCache(o2) {
   }
   if (o2.cow === void 0) throw new Error("this platform has no copy-on-write copy");
   const cache2 = ensureStateDir(o2.stateRoot, cacheDir(o2.stateRoot));
-  const staging = join11(cache2, `.staging-${randomBytes7(4).toString("hex")}`);
+  const staging = join13(cache2, `.staging-${randomBytes7(4).toString("hex")}`);
   try {
     ensureStateDir(o2.stateRoot, staging);
     const places = seedPlaces(o2.clone, o2.homeDir);
@@ -35650,7 +36048,7 @@ async function publishCache(o2) {
       const [base2, ...segs] = places[seed];
       const from = realDirBelow(base2, ...segs);
       if (from === void 0 || readdirSync5(from).length === 0) continue;
-      if (!await copyInto(o2.stateRoot, o2.cow, from, join11(staging, seed), SEED_TIMEOUT_MS)) {
+      if (!await copyInto(o2.stateRoot, o2.cow, from, join13(staging, seed), SEED_TIMEOUT_MS)) {
         throw new Error(
           `copying ${seed} failed: the state root needs a file system with copy-on-write copies (APFS, btrfs, XFS)`
         );
@@ -35672,7 +36070,7 @@ async function publishCache(o2) {
       seeds,
       sizeBytes
     };
-    const trash = join11(cache2, `.trash-${randomBytes7(4).toString("hex")}`);
+    const trash = join13(cache2, `.trash-${randomBytes7(4).toString("hex")}`);
     await withLaunchLock(o2.ownerRoot, o2.now, () => {
       const old = seedsDir(o2.stateRoot);
       if (lstatOrUndefined(old) !== void 0) renameSync7(old, trash);
@@ -35714,7 +36112,7 @@ function removeLeftovers(stateRoot) {
   }
   for (const name of names) {
     if (name.startsWith(".trash-") || name.startsWith(".staging-")) {
-      removeStateEntry(stateRoot, join11(cacheDir(stateRoot), name));
+      removeStateEntry(stateRoot, join13(cacheDir(stateRoot), name));
     }
   }
 }
@@ -35763,10 +36161,10 @@ function cacheDoctorLine(s) {
   return `build cache: ${s.enabled ? "on" : "off, a copy is kept"}, ${state}, ${gb(s.sizeBytes)} of ${gb(s.maxGb * 1e9)} for all projects`;
 }
 function gcRanAt(ownerRoot) {
-  const file4 = join11(ownerRoot, CACHE_GC_FILE);
+  const file4 = join13(ownerRoot, CACHE_GC_FILE);
   if (!isRealFile(file4)) return void 0;
   try {
-    const raw = JSON.parse(readFileSync12(file4, "utf8"));
+    const raw = JSON.parse(readFileSync13(file4, "utf8"));
     const t = isObject4(raw) && typeof raw.at === "string" ? Date.parse(raw.at) : Number.NaN;
     return Number.isNaN(t) ? void 0 : t;
   } catch {
@@ -35778,7 +36176,7 @@ async function cacheCleanup(o2) {
   if (last !== void 0 && o2.now.getTime() - last < DAY_MS2) return void 0;
   writeStateFile(
     o2.ownerRoot,
-    join11(o2.ownerRoot, CACHE_GC_FILE),
+    join13(o2.ownerRoot, CACHE_GC_FILE),
     `${JSON.stringify({ at: o2.now.toISOString() })}
 `
   );
@@ -35796,11 +36194,11 @@ async function cacheCleanup(o2) {
   const removed = [];
   for (const e of entries2) {
     if (total <= cap) break;
-    const trash = join11(cacheDir(e.root), `.trash-${randomBytes7(4).toString("hex")}`);
+    const trash = join13(cacheDir(e.root), `.trash-${randomBytes7(4).toString("hex")}`);
     await withLaunchLock(o2.ownerRoot, o2.now, () => {
       assertStatePath(e.root, trash);
       if (isRealDir(seedsDir(e.root))) renameSync7(seedsDir(e.root), trash);
-      removeStateEntry(e.root, join11(cacheDir(e.root), META));
+      removeStateEntry(e.root, join13(cacheDir(e.root), META));
     });
     rmSync4(trash, { recursive: true, force: true });
     total -= e.bytes;
@@ -35810,35 +36208,35 @@ async function cacheCleanup(o2) {
 }
 
 // src/clone-gc.ts
-import { lstatSync as lstatSync25, readdirSync as readdirSync12, readFileSync as readFileSync29 } from "node:fs";
-import { join as join31 } from "node:path";
+import { lstatSync as lstatSync26, readdirSync as readdirSync12, readFileSync as readFileSync30 } from "node:fs";
+import { join as join33 } from "node:path";
 
 // src/crew.ts
 import {
   chmodSync as chmodSync5,
   existsSync as existsSync8,
-  lstatSync as lstatSync24,
+  lstatSync as lstatSync25,
   readdirSync as readdirSync11,
-  readFileSync as readFileSync28,
+  readFileSync as readFileSync29,
   realpathSync as realpathSync8,
-  statSync as statSync4,
+  statSync as statSync5,
   unlinkSync as unlinkSync6,
   writeFileSync as writeFileSync10
 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import { basename as basename4, dirname as dirname11, join as join30, resolve as resolve7, sep as sep6 } from "node:path";
+import { homedir as homedir7 } from "node:os";
+import { basename as basename4, dirname as dirname11, join as join32, resolve as resolve8, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/analyzer-timeout.ts
 import {
   appendFileSync,
-  lstatSync as lstatSync10,
-  readFileSync as readFileSync13,
+  lstatSync as lstatSync11,
+  readFileSync as readFileSync14,
   renameSync as renameSync8,
   rmSync as rmSync5,
   writeFileSync as writeFileSync7
 } from "node:fs";
-import { isAbsolute as isAbsolute5, join as join12, resolve as resolve4 } from "node:path";
+import { isAbsolute as isAbsolute6, join as join14, resolve as resolve5 } from "node:path";
 var DEFAULT_ANALYZER_TIMEOUT_MINUTES = 30;
 var REVIEW_GRACE_MS = 15 * 6e4;
 var TIMEOUT_RESULT = "skipped: timeout";
@@ -35854,13 +36252,13 @@ function reviewTimeouts(o2) {
 }
 var AGENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 var timeoutsFileOf = (agentsFile) => agentsFile.replace(/\.agents\.json$/, ".timeouts");
-var agentsFileOf = (stateRoot, id) => join12(stateRoot, "guard", `${id}.agents.json`);
+var agentsFileOf = (stateRoot, id) => join14(stateRoot, "guard", `${id}.agents.json`);
 function timedOutAgents(stateRoot, id) {
   const file4 = timeoutsFileOf(agentsFileOf(stateRoot, id));
   let text2;
   try {
-    if (!lstatSync10(file4).isFile()) return 1;
-    text2 = readFileSync13(file4, "utf8");
+    if (!lstatSync11(file4).isFile()) return 1;
+    text2 = readFileSync14(file4, "utf8");
   } catch (e) {
     return e.code === "ENOENT" ? 0 : 1;
   }
@@ -35883,7 +36281,7 @@ function timeoutReportProblem(stopped, results, analyzers, mandatory) {
 }
 function timeoutsOfContext(ctxFile) {
   try {
-    const ctx = JSON.parse(readFileSync13(ctxFile, "utf8"));
+    const ctx = JSON.parse(readFileSync14(ctxFile, "utf8"));
     const t = ctx?.timeouts;
     if (t === void 0 || typeof t.analyzerMs !== "number" || typeof t.sessionEndsAt !== "string" || typeof t.reportFile !== "string" || typeof t.agentsFile !== "string") {
       return void 0;
@@ -35914,13 +36312,13 @@ function skippedOwedParts(skippedOwed, results) {
 }
 
 // src/brief-caps.ts
-import { lstatSync as lstatSync13, readFileSync as readFileSync17 } from "node:fs";
-import { join as join16 } from "node:path";
+import { lstatSync as lstatSync14, readFileSync as readFileSync18 } from "node:fs";
+import { join as join18 } from "node:path";
 
 // src/capabilities.ts
 var import_yaml8 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync14 } from "node:fs";
-import { join as join13 } from "node:path";
+import { readFileSync as readFileSync15 } from "node:fs";
+import { join as join15 } from "node:path";
 import { fileURLToPath } from "node:url";
 var PHASES = ["design", "build", "review"];
 var TRIGGERS = ["rework", "after-fix", "epic-end", "release", "contract-change"];
@@ -35984,10 +36382,10 @@ function capabilitiesDir() {
   return fileURLToPath(new URL("../capabilities/", import.meta.url));
 }
 function loadCapabilities(dir = capabilitiesDir()) {
-  const file4 = join13(dir, "INDEX.yaml");
+  const file4 = join15(dir, "INDEX.yaml");
   let raw;
   try {
-    raw = (0, import_yaml8.parse)(readFileSync14(file4, "utf8"));
+    raw = (0, import_yaml8.parse)(readFileSync15(file4, "utf8"));
   } catch (e) {
     throw new CapabilitiesError(`${file4}: cannot read (${e.message.split("\n")[0]})`);
   }
@@ -36113,8 +36511,8 @@ function itemTriggers(item) {
 }
 
 // src/review.ts
-import { lstatSync as lstatSync11, readdirSync as readdirSync6, readFileSync as readFileSync15 } from "node:fs";
-import { join as join14 } from "node:path";
+import { lstatSync as lstatSync12, readdirSync as readdirSync6, readFileSync as readFileSync16 } from "node:fs";
+import { join as join16 } from "node:path";
 var MAX_FIX_ATTEMPTS = 3;
 var MAX_REVIEW_ROUNDS = 6;
 var SMALL_MAX_LINES = 400;
@@ -36376,13 +36774,13 @@ var crewCapsSchema = external_exports.strictObject({
   /** The full suites on that main commit as Studio read them at launch. */
   suites: external_exports.array(external_exports.strictObject({ name: external_exports.string(), state: external_exports.enum(["pass", "fail"]) })).max(50).optional()
 });
-var capsFile = (stateRoot, id) => join14(stateRoot, "briefs", `${id}.caps.json`);
+var capsFile = (stateRoot, id) => join16(stateRoot, "briefs", `${id}.caps.json`);
 function readCrewCaps(stateRoot, id) {
   const file4 = capsFile(stateRoot, id);
   try {
     assertStatePath(stateRoot, file4);
-    if (!lstatSync11(file4).isFile()) return void 0;
-    const parsed = crewCapsSchema.safeParse(JSON.parse(readFileSync15(file4, "utf8")));
+    if (!lstatSync12(file4).isFile()) return void 0;
+    const parsed = crewCapsSchema.safeParse(JSON.parse(readFileSync16(file4, "utf8")));
     return parsed.success ? parsed.data : void 0;
   } catch {
     return void 0;
@@ -36390,7 +36788,7 @@ function readCrewCaps(stateRoot, id) {
 }
 function launchRecords(stateRoot) {
   try {
-    return readdirSync6(join14(stateRoot, "briefs")).flatMap((n4) => {
+    return readdirSync6(join16(stateRoot, "briefs")).flatMap((n4) => {
       const m = /^(.+)\.caps\.json$/.exec(n4);
       return m ? [m[1]] : [];
     });
@@ -36482,8 +36880,8 @@ function checkReviewCaps(caps, report) {
 // src/sources.ts
 var import_yaml9 = __toESM(require_dist(), 1);
 import { createHash as createHash2 } from "node:crypto";
-import { lstatSync as lstatSync12, readdirSync as readdirSync7, readFileSync as readFileSync16, renameSync as renameSync9 } from "node:fs";
-import { join as join15 } from "node:path";
+import { lstatSync as lstatSync13, readdirSync as readdirSync7, readFileSync as readFileSync17, renameSync as renameSync9 } from "node:fs";
+import { join as join17 } from "node:path";
 var VENDORABLE = ["MIT", "Apache-2.0"];
 var safeRelative = (p) => p.length > 0 && !p.startsWith("/") && !p.includes("\\") && !p.split("/").some((seg) => seg === ".." || seg === "" || seg === ".") && !new RegExp("\\p{Cc}", "u").test(p);
 var sourceSchema = external_exports.strictObject({
@@ -36525,10 +36923,10 @@ var SourcesError = class extends Error {
   }
 };
 function loadSources(dir = capabilitiesDir()) {
-  const file4 = join15(dir, "SOURCES.yaml");
+  const file4 = join17(dir, "SOURCES.yaml");
   let raw;
   try {
-    raw = (0, import_yaml9.parse)(readFileSync16(file4, "utf8"));
+    raw = (0, import_yaml9.parse)(readFileSync17(file4, "utf8"));
   } catch (e) {
     throw new SourcesError(`${file4}: cannot read (${e.message.split("\n")[0]})`);
   }
@@ -36553,12 +36951,12 @@ function hashOf(dir, rel) {
     let at2 = dir;
     const segments = rel.split("/");
     for (const [i2, seg] of segments.entries()) {
-      at2 = join15(at2, seg);
-      const st = lstatSync12(at2);
+      at2 = join17(at2, seg);
+      const st = lstatSync13(at2);
       if (st.isSymbolicLink()) return void 0;
       if (i2 < segments.length - 1 ? !st.isDirectory() : !st.isFile()) return void 0;
     }
-    return createHash2("sha256").update(readFileSync16(at2)).digest("hex");
+    return createHash2("sha256").update(readFileSync17(at2)).digest("hex");
   } catch {
     return void 0;
   }
@@ -36605,8 +37003,8 @@ function compareToPin(pin, dir, source) {
   const verdict = conflict.length > 0 ? "conflict" : unclear2.length > 0 ? "unclear" : "fits";
   return { verdict, findings };
 }
-var sourcesDir = (ownerRoot) => join15(ownerRoot, "sources");
-var lockPath = (ownerRoot) => join15(sourcesDir(ownerRoot), "lock.json");
+var sourcesDir = (ownerRoot) => join17(ownerRoot, "sources");
+var lockPath = (ownerRoot) => join17(sourcesDir(ownerRoot), "lock.json");
 var lockSchema = external_exports.record(
   external_exports.string(),
   external_exports.object({
@@ -36618,7 +37016,7 @@ var lockSchema = external_exports.record(
 );
 function readLock(ownerRoot) {
   try {
-    const parsed = lockSchema.safeParse(JSON.parse(readFileSync16(lockPath(ownerRoot), "utf8")));
+    const parsed = lockSchema.safeParse(JSON.parse(readFileSync17(lockPath(ownerRoot), "utf8")));
     return parsed.success ? parsed.data : void 0;
   } catch {
     return void 0;
@@ -36628,7 +37026,7 @@ var writeLock = (ownerRoot, lock) => writeStateFile(ownerRoot, lockPath(ownerRoo
 `);
 var exists2 = (p) => {
   try {
-    lstatSync12(p);
+    lstatSync13(p);
     return true;
   } catch {
     return false;
@@ -36637,12 +37035,12 @@ var exists2 = (p) => {
 function pinProblem(ownerRoot, id, rel) {
   const want = readLock(ownerRoot)?.[id]?.hashes?.[rel];
   if (want === void 0) return "it has no recorded hash";
-  return hashOf(join15(sourcesDir(ownerRoot), id), rel) === want ? void 0 : "differs from its pin";
+  return hashOf(join17(sourcesDir(ownerRoot), id), rel) === want ? void 0 : "differs from its pin";
 }
 var FULL_SHA = /^[0-9a-f]{40,64}$/;
 async function fetchTo(ports, ownerRoot, source, name) {
   const base2 = sourcesDir(ownerRoot);
-  const dest = join15(base2, name);
+  const dest = join17(base2, name);
   removeStateEntry(ownerRoot, dest);
   try {
     await ports.git.run(base2, [
@@ -36683,7 +37081,7 @@ async function setupSources(o2) {
   const list2 = pick3(o2.index, o2.only);
   ensureStateDir(o2.ownerRoot, sourcesDir(o2.ownerRoot));
   for (const source of list2) {
-    const dir = join15(sourcesDir(o2.ownerRoot), source.id);
+    const dir = join17(sourcesDir(o2.ownerRoot), source.id);
     if (exists2(dir)) {
       out.push({ id: source.id, result: "present" });
       continue;
@@ -36693,7 +37091,7 @@ async function setupSources(o2) {
       if (lock === void 0) throw new Error("the lock cannot be read");
       const fetching = `${source.id}.fetching`;
       const commit = await fetchTo(o2.ports, o2.ownerRoot, source, fetching);
-      renameSync9(join15(sourcesDir(o2.ownerRoot), fetching), dir);
+      renameSync9(join17(sourcesDir(o2.ownerRoot), fetching), dir);
       lock[source.id] = {
         commit,
         license: source.license,
@@ -36719,7 +37117,7 @@ async function checkSources(o2) {
   const list2 = pick3(o2.index, void 0);
   const lock = readLock(o2.ownerRoot);
   for (const source of list2) {
-    const active = join15(sourcesDir(o2.ownerRoot), source.id);
+    const active = join17(sourcesDir(o2.ownerRoot), source.id);
     if (!exists2(active)) {
       out.push(held(source.id, "not-fetched", "run studio setup sources"));
       continue;
@@ -36752,7 +37150,7 @@ async function checkSources(o2) {
     }
     try {
       const candidate = await fetchTo(o2.ports, o2.ownerRoot, source, `${source.id}.candidate`);
-      const candidateDir = join15(sourcesDir(o2.ownerRoot), `${source.id}.candidate`);
+      const candidateDir = join17(sourcesDir(o2.ownerRoot), `${source.id}.candidate`);
       out.push({ id: source.id, ...compareToPin(hashes, candidateDir, source), pinned, candidate });
     } catch {
       out.push(held(source.id, "fetch-failed", "the candidate could not be fetched", pinned));
@@ -36764,8 +37162,8 @@ async function applySource(o2) {
   const source = pick3(o2.index, [o2.id])[0];
   if (source === void 0) throw new SourcesError(`unknown source ${clean2(o2.id)}`);
   const base2 = sourcesDir(o2.ownerRoot);
-  const active = join15(base2, source.id);
-  const candidate = join15(base2, `${source.id}.candidate`);
+  const active = join17(base2, source.id);
+  const candidate = join17(base2, `${source.id}.candidate`);
   if (!exists2(active) || !exists2(candidate)) {
     return { id: source.id, applied: false, reason: "no candidate: run studio sources check" };
   }
@@ -36778,7 +37176,7 @@ async function applySource(o2) {
   if (r.verdict !== "fits") return { id: source.id, applied: false, reason: `held: ${r.verdict}` };
   const commit = (await o2.ports.git.run(candidate, ["rev-parse", "HEAD"])).trim();
   if (!FULL_SHA.test(commit)) return { id: source.id, applied: false, reason: "no commit" };
-  const old = join15(base2, `${source.id}.old`);
+  const old = join17(base2, `${source.id}.old`);
   removeStateEntry(o2.ownerRoot, old);
   renameSync9(active, old);
   try {
@@ -37073,11 +37471,11 @@ function readBelow(root, rel) {
   try {
     let at2 = root;
     const segments = rel.split("/");
-    if (lstatSync13(at2).isSymbolicLink()) return { why: "it is reached through a link" };
+    if (lstatSync14(at2).isSymbolicLink()) return { why: "it is reached through a link" };
     for (const [i2, seg] of segments.entries()) {
       if (seg === ".." || seg === "" || seg === ".") return { why: "it leaves the source" };
-      at2 = join16(at2, seg);
-      const st = lstatSync13(at2);
+      at2 = join18(at2, seg);
+      const st = lstatSync14(at2);
       if (st.isSymbolicLink()) return { why: "it is reached through a link" };
       if (i2 < segments.length - 1 ? !st.isDirectory() : !st.isFile()) {
         return { why: "it is not a regular file" };
@@ -37086,7 +37484,7 @@ function readBelow(root, rel) {
         return { why: "it is larger than 256 KiB" };
       }
     }
-    return { text: readFileSync17(at2, "utf8") };
+    return { text: readFileSync18(at2, "utf8") };
   } catch {
     return { why: "it cannot be read" };
   }
@@ -37114,13 +37512,13 @@ function writeCaps(o2) {
   const { stateRoot, id, forItem } = o2;
   const { resolved, review } = forItem;
   const shipped2 = o2.dir ?? capabilitiesDir();
-  const capsDir = join16(stateRoot, "briefs", `${id}.caps`);
+  const capsDir = join18(stateRoot, "briefs", `${id}.caps`);
   removeStateEntry(stateRoot, capsDir);
   removeStateEntry(stateRoot, capsFile(stateRoot, id));
   removeStateEntry(stateRoot, skillsFile(stateRoot, id));
   const skipped = [];
   const copy = (rel, text2) => {
-    const file4 = join16(capsDir, ...rel.split("/"));
+    const file4 = join18(capsDir, ...rel.split("/"));
     writeStateFile(stateRoot, file4, text2);
     return file4;
   };
@@ -37130,7 +37528,7 @@ function writeCaps(o2) {
     return entry?.reads.filter((r) => r !== "LICENSE");
   };
   const licenceUnknown = (source) => sourceList.find((s) => s.id === source)?.license === UNKNOWN_LICENCE;
-  const sourceRoot = (source) => join16(o2.ownerRoot, "sources", source);
+  const sourceRoot = (source) => join18(o2.ownerRoot, "sources", source);
   const clean7 = (s, max) => s.replace(/[^\P{Cc}\n\t]/gu, "").slice(0, max);
   const pullRequestData = (p) => ({
     description: copy(
@@ -37171,7 +37569,7 @@ ${clean7(p.body, 2e4)}
         continue;
       }
       try {
-        lstatSync13(sourceRoot(source));
+        lstatSync14(sourceRoot(source));
       } catch {
         skipped.push({ id: k.rowId, reason: `source ${source} not fetched` });
         continue;
@@ -37185,7 +37583,7 @@ ${clean7(p.body, 2e4)}
       knowledge.push({ ref: k.ref, where: copy(`sources/${source}/${rel}`, got2.text) });
       continue;
     }
-    const got = readBelow(join16(shipped2, kind), rest);
+    const got = readBelow(join18(shipped2, kind), rest);
     if ("why" in got) {
       skipped.push({ id: k.rowId, reason: `shipped file: ${got.why}` });
       continue;
@@ -37194,7 +37592,7 @@ ${clean7(p.body, 2e4)}
   }
   const analyzers = [];
   const copyAnalyzer = (a2) => {
-    const got = readBelow(join16(shipped2, "analyzers"), `${a2.id}.md`);
+    const got = readBelow(join18(shipped2, "analyzers"), `${a2.id}.md`);
     if ("why" in got) {
       if (MANDATORY.includes(a2.id)) {
         throw new Error(`analyzer ${a2.id} is missing from the plugin; refusing to launch`);
@@ -37211,7 +37609,7 @@ ${clean7(p.body, 2e4)}
       const texts = [];
       for (const rel of reads) {
         try {
-          lstatSync13(sourceRoot(a2.source));
+          lstatSync14(sourceRoot(a2.source));
         } catch {
           skipped.push({ id: a2.id, reason: `source ${a2.source} not fetched` });
           return false;
@@ -37252,7 +37650,7 @@ ${clean7(p.body, 2e4)}
   );
   let reviewOut;
   if (review !== void 0) {
-    const contract = readBelow(join16(shipped2, "analyzers"), "CONTRACT.md");
+    const contract = readBelow(join18(shipped2, "analyzers"), "CONTRACT.md");
     if ("why" in contract) throw new Error("the analyzer contract is missing from the plugin");
     const gate = gateRules({
       ids: analyzers.map((a2) => a2.id),
@@ -37340,13 +37738,13 @@ ${notRunHereList(review.notRunHere, clean7)}`
     ...reviewOut === void 0 ? {} : { review: reviewOut }
   };
 }
-var skillsFile = (stateRoot, id) => join16(stateRoot, "briefs", `${id}.skills.json`);
+var skillsFile = (stateRoot, id) => join18(stateRoot, "briefs", `${id}.skills.json`);
 function readSkillsMissing(stateRoot, id) {
   const file4 = skillsFile(stateRoot, id);
   try {
     assertStatePath(stateRoot, file4);
-    if (!lstatSync13(file4).isFile()) return [];
-    const raw = JSON.parse(readFileSync17(file4, "utf8"));
+    if (!lstatSync14(file4).isFile()) return [];
+    const raw = JSON.parse(readFileSync18(file4, "utf8"));
     return Array.isArray(raw.missing) ? raw.missing.filter((m) => typeof m === "string").slice(0, 50) : [];
   } catch {
     return [];
@@ -37354,25 +37752,25 @@ function readSkillsMissing(stateRoot, id) {
 }
 
 // src/costs.ts
-import { closeSync as closeSync5, fstatSync as fstatSync4, lstatSync as lstatSync15, openSync as openSync5, readFileSync as readFileSync19, readSync as readSync3 } from "node:fs";
-import { join as join18 } from "node:path";
+import { closeSync as closeSync5, fstatSync as fstatSync4, lstatSync as lstatSync16, openSync as openSync5, readFileSync as readFileSync20, readSync as readSync3 } from "node:fs";
+import { join as join20 } from "node:path";
 
 // src/worker-state.ts
-import { existsSync as existsSync5, lstatSync as lstatSync14, readFileSync as readFileSync18 } from "node:fs";
-import { join as join17 } from "node:path";
+import { existsSync as existsSync5, lstatSync as lstatSync15, readFileSync as readFileSync19 } from "node:fs";
+import { join as join19 } from "node:path";
 var WORKERS_FILE = "workers.json";
 var WORKERS_LOCK = "workers.lock";
 var WORKERS_LOCK_STALE_MS = 3e4;
 var empty = () => ({ items: {}, runs: {} });
-var file2 = (stateRoot) => join17(stateRoot, WORKERS_FILE);
+var file2 = (stateRoot) => join19(stateRoot, WORKERS_FILE);
 function readWorkers(stateRoot) {
   const f3 = file2(stateRoot);
   assertStatePath(stateRoot, f3);
   if (!existsSync5(f3)) return empty();
-  if (!lstatSync14(f3).isFile()) throw new Error(`${f3} is not a plain file`);
+  if (!lstatSync15(f3).isFile()) throw new Error(`${f3} is not a plain file`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync18(f3, "utf8"));
+    raw = JSON.parse(readFileSync19(f3, "utf8"));
   } catch {
     throw new Error(`${f3} is not valid JSON`);
   }
@@ -37509,12 +37907,12 @@ function addUsage(a2, b) {
     ...a2.estimated || b.estimated ? { estimated: true } : {}
   };
 }
-var logFile2 = (stateRoot, id) => join18(stateRoot, "logs", `${id}.jsonl`);
+var logFile2 = (stateRoot, id) => join20(stateRoot, "logs", `${id}.jsonl`);
 function readLog(stateRoot, id, from = 0) {
   const file4 = logFile2(stateRoot, id);
   assertStatePath(stateRoot, file4);
   try {
-    if (!lstatSync15(file4).isFile()) return "";
+    if (!lstatSync16(file4).isFile()) return "";
     const fd = openSync5(file4, "r");
     try {
       const size = fstatSync4(fd).size;
@@ -37585,17 +37983,17 @@ function withItemUsage(board, stateRoot, id) {
 var usd = (n4) => `$${n4.toFixed(2)}`;
 var DAY_RE2 = /^\d{4}-\d{2}-\d{2}$/;
 var KEY_RE = /^[A-Z]+-\d+@[0-9T:.Z+-]{10,40}$/;
-var ledgerFile = (stateRoot) => join18(stateRoot, COSTS_FILE);
+var ledgerFile = (stateRoot) => join20(stateRoot, COSTS_FILE);
 function readLedger(stateRoot) {
   const file4 = ledgerFile(stateRoot);
   try {
-    if (!lstatSync15(file4).isFile()) return { ok: false };
+    if (!lstatSync16(file4).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, runs: {} } : { ok: false };
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync19(file4, "utf8"));
+    raw = JSON.parse(readFileSync20(file4, "utf8"));
   } catch {
     return { ok: false };
   }
@@ -37760,8 +38158,8 @@ function costReport(board) {
 
 // src/group.ts
 import { createHash as createHash3 } from "node:crypto";
-import { lstatSync as lstatSync16, readdirSync as readdirSync8, readFileSync as readFileSync20, realpathSync as realpathSync4 } from "node:fs";
-import { join as join19 } from "node:path";
+import { lstatSync as lstatSync17, readdirSync as readdirSync8, readFileSync as readFileSync21, realpathSync as realpathSync4 } from "node:fs";
+import { join as join21 } from "node:path";
 var GroupError = class extends Error {
   constructor(message) {
     super(message);
@@ -37806,7 +38204,7 @@ function readProjectBoard(p) {
   const file4 = boardPath(real);
   let plain2 = false;
   try {
-    plain2 = lstatSync16(file4).isFile();
+    plain2 = lstatSync17(file4).isFile();
   } catch {
     plain2 = false;
   }
@@ -37989,13 +38387,13 @@ function referenceKey(m, sha) {
     JSON.stringify([m.group.name, m.main.repo, sha, m.group.reference, m.group.referenceMaxKib])
   ).digest("hex").slice(0, 32);
 }
-var cacheDir2 = (stateRoot) => join19(stateRoot, "reference");
+var cacheDir2 = (stateRoot) => join21(stateRoot, "reference");
 function readCached(stateRoot, key, sha) {
-  const file4 = join19(cacheDir2(stateRoot), `${key}.json`);
+  const file4 = join21(cacheDir2(stateRoot), `${key}.json`);
   try {
     assertStatePath(stateRoot, file4);
-    if (!lstatSync16(file4).isFile()) return void 0;
-    const r = JSON.parse(readFileSync20(file4, "utf8"));
+    if (!lstatSync17(file4).isFile()) return void 0;
+    const r = JSON.parse(readFileSync21(file4, "utf8"));
     if (r.sha !== sha || !Array.isArray(r.files) || !Array.isArray(r.omitted)) return void 0;
     if (r.files.some((f3) => typeof f3.content !== "string" || pathProblem(f3.path) !== void 0)) {
       return void 0;
@@ -38008,8 +38406,8 @@ function readCached(stateRoot, key, sha) {
 function pruneCache(stateRoot, keep) {
   try {
     const dir = cacheDir2(stateRoot);
-    const entries2 = readdirSync8(dir).filter((n4) => n4.endsWith(".json") && n4 !== `${keep}.json`).map((n4) => ({ n: n4, at: lstatSync16(join19(dir, n4)).mtimeMs })).sort((a2, b) => b.at - a2.at);
-    for (const e of entries2.slice(4)) removeStateEntry(stateRoot, join19(dir, e.n));
+    const entries2 = readdirSync8(dir).filter((n4) => n4.endsWith(".json") && n4 !== `${keep}.json`).map((n4) => ({ n: n4, at: lstatSync17(join21(dir, n4)).mtimeMs })).sort((a2, b) => b.at - a2.at);
+    for (const e of entries2.slice(4)) removeStateEntry(stateRoot, join21(dir, e.n));
   } catch {
   }
 }
@@ -38086,7 +38484,7 @@ async function readReference(m, stateRoot, ports) {
     files,
     omitted
   };
-  writeStateFile(stateRoot, join19(cacheDir2(stateRoot), `${key}.json`), `${JSON.stringify(ref)}
+  writeStateFile(stateRoot, join21(cacheDir2(stateRoot), `${key}.json`), `${JSON.stringify(ref)}
 `);
   pruneCache(stateRoot, key);
   return ref;
@@ -38112,11 +38510,11 @@ function caseCollisions(paths) {
 }
 var referenceCollisions = (ref) => ref.omitted.filter((o2) => o2.why.startsWith("case collision with ")).map((o2) => o2.path);
 function writeReference(stateRoot, id, ref, change) {
-  const dir = join19(stateRoot, "briefs", `${id}.reference`);
+  const dir = join21(stateRoot, "briefs", `${id}.reference`);
   removeStateEntry(stateRoot, dir);
   for (const f3 of ref.files)
-    writeStateFile(stateRoot, join19(dir, "files", ...f3.path.split("/")), f3.content);
-  const index = join19(dir, "INDEX.md");
+    writeStateFile(stateRoot, join21(dir, "files", ...f3.path.split("/")), f3.content);
+  const index = join21(dir, "INDEX.md");
   writeStateFile(
     stateRoot,
     index,
@@ -38147,7 +38545,7 @@ function writeReference(stateRoot, id, ref, change) {
     main: ref.main,
     repo: ref.repo,
     sha: ref.sha,
-    dir: join19(dir, "files"),
+    dir: join21(dir, "files"),
     index,
     files: ref.files.length,
     omitted: ref.omitted.length,
@@ -38168,13 +38566,13 @@ function referenceBrief(r) {
 }
 var CONTRACT_NOTE = "contract-change: ";
 var contractNote = (group, from, to, sha) => `${CONTRACT_NOTE}${group}@${from}..${to}@${sha.slice(0, 12)}`;
-var changeFile = (stateRoot, id) => join19(stateRoot, "contract-changes", `${id}.json`);
+var changeFile = (stateRoot, id) => join21(stateRoot, "contract-changes", `${id}.json`);
 function readContractChange(stateRoot, item) {
   try {
     const file4 = changeFile(stateRoot, item.id);
     assertStatePath(stateRoot, file4);
-    if (!lstatSync16(file4).isFile()) return void 0;
-    const c3 = JSON.parse(readFileSync20(file4, "utf8"));
+    if (!lstatSync17(file4).isFile()) return void 0;
+    const c3 = JSON.parse(readFileSync21(file4, "utf8"));
     if (!Array.isArray(c3.changed) || typeof c3.group !== "string" || typeof c3.from !== "string" || typeof c3.to !== "string" || typeof c3.fromDigest !== "string" || typeof c3.toDigest !== "string") {
       return void 0;
     }
@@ -38193,12 +38591,12 @@ function contractScope(m) {
   return { globs: m.group.contracts ?? m.group.reference, narrow: m.self.contracts ?? [] };
 }
 function readContracts(stateRoot) {
-  const file4 = join19(stateRoot, CONTRACTS_FILE);
+  const file4 = join21(stateRoot, CONTRACTS_FILE);
   assertStatePath(stateRoot, file4);
   let text2;
   try {
-    if (!lstatSync16(file4).isFile()) throw new GroupError(`${CONTRACTS_FILE} is not a plain file`);
-    text2 = readFileSync20(file4, "utf8");
+    if (!lstatSync17(file4).isFile()) throw new GroupError(`${CONTRACTS_FILE} is not a plain file`);
+    text2 = readFileSync21(file4, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return void 0;
     throw e;
@@ -38266,7 +38664,7 @@ async function checkContracts(o2) {
     digest: digest3,
     files
   };
-  const save = () => writeStateFile(o2.stateRoot, join19(o2.stateRoot, CONTRACTS_FILE), `${JSON.stringify(record2)}
+  const save = () => writeStateFile(o2.stateRoot, join21(o2.stateRoot, CONTRACTS_FILE), `${JSON.stringify(record2)}
 `);
   if (before === void 0 || before.scope !== scope || before.group !== o2.m.group.name || before.main !== o2.m.main.id) {
     save();
@@ -38354,10 +38752,10 @@ function groupRowFromState(p, m, text2, stateDir) {
   };
 }
 function readStateText(root) {
-  const file4 = join19(root, "state.json");
+  const file4 = join21(root, "state.json");
   try {
-    if (!lstatSync16(file4).isFile()) return "";
-    return readFileSync20(file4, "utf8");
+    if (!lstatSync17(file4).isFile()) return "";
+    return readFileSync21(file4, "utf8");
   } catch {
     return void 0;
   }
@@ -38462,14 +38860,14 @@ var PULL_FLAGS = /* @__PURE__ */ new Set([
 ]);
 
 // src/owner-state.ts
-import { lstatSync as lstatSync17, renameSync as renameSync10 } from "node:fs";
-import { basename as basename3, dirname as dirname6, join as join20 } from "node:path";
+import { lstatSync as lstatSync18, renameSync as renameSync10 } from "node:fs";
+import { basename as basename3, dirname as dirname6, join as join22 } from "node:path";
 var MIGRATE_LOCK = "migrate.lock";
 var LOCK_STALE_MS2 = 5 * 6e4;
 function mergeBlocks(ownerRoot, legacy) {
   const old = readBlocksFile(legacy);
   if (!old.ok) return "legacy-unreadable";
-  const own2 = readBlocksFile(join20(ownerRoot, "blocks.json"));
+  const own2 = readBlocksFile(join22(ownerRoot, "blocks.json"));
   if (!own2.ok) return "owner-unreadable";
   const merged = own2.blocks.map((b) => ({ ...b }));
   for (const block of old.blocks) {
@@ -38484,7 +38882,7 @@ var parkEnd = (until) => until === void 0 ? Number.NEGATIVE_INFINITY : Date.pars
 function mergeLimits(ownerRoot, legacy) {
   const old = readLimitsFile(legacy);
   if (!old.ok) return "legacy-unreadable";
-  const own2 = readLimitsFile(join20(ownerRoot, "limits.json"));
+  const own2 = readLimitsFile(join22(ownerRoot, "limits.json"));
   if (!own2.ok) return "owner-unreadable";
   const merged = { ...own2.labels };
   for (const [label, park] of Object.entries(old.labels)) {
@@ -38497,7 +38895,7 @@ function mergeLimits(ownerRoot, legacy) {
 function mergeUsage(ownerRoot, legacy) {
   const old = readUsageFile(legacy);
   if (!old.ok) return "legacy-unreadable";
-  const own2 = readUsageFile(join20(ownerRoot, "usage.json"));
+  const own2 = readUsageFile(join22(ownerRoot, "usage.json"));
   if (!own2.ok) return "owner-unreadable";
   const merged = own2.days;
   for (const [day, labels] of Object.entries(old.days)) {
@@ -38515,10 +38913,10 @@ var FILES = [
   { name: "limits.json", lock: "limits.lock", staleMs: LOCK_STALE_MS2, merge: mergeLimits },
   { name: "usage.json", lock: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS, merge: mergeUsage }
 ];
-var present = (file4) => lstatSync17(file4, { throwIfNoEntry: false }) !== void 0;
+var present = (file4) => lstatSync18(file4, { throwIfNoEntry: false }) !== void 0;
 function pendingLegacyState(stateBase) {
   return projectStateRoots(stateBase).flatMap(
-    (root) => FILES.map((f3) => join20(root, f3.name)).filter(present)
+    (root) => FILES.map((f3) => join22(root, f3.name)).filter(present)
   );
 }
 function freeName(file4) {
@@ -38527,10 +38925,10 @@ function freeName(file4) {
   return candidate;
 }
 function keepUnreadable(ownerRoot, root, name) {
-  const legacy = join20(root, name);
-  const kept = freeName(join20(ownerRoot, `${name}.legacy-${basename3(root)}`));
+  const legacy = join22(root, name);
+  const kept = freeName(join22(ownerRoot, `${name}.legacy-${basename3(root)}`));
   ensureStateDir(ownerRoot, ownerRoot);
-  if (lstatSync17(legacy).isSymbolicLink()) {
+  if (lstatSync18(legacy).isSymbolicLink()) {
     const note = `${name} in the project state root ${basename3(root)} was a symlink; it was not followed
 `;
     writeStateFile(ownerRoot, kept, note);
@@ -38540,7 +38938,7 @@ function keepUnreadable(ownerRoot, root, name) {
   }
 }
 function migrateFile(ownerRoot, roots, file4, now, problems) {
-  const here = roots.filter((root) => present(join20(root, file4.name)));
+  const here = roots.filter((root) => present(join22(root, file4.name)));
   if (here.length === 0) return;
   const lock = acquireStateLock(ownerRoot, file4.lock, { now, heartbeatStaleMs: file4.staleMs });
   if (!lock) {
@@ -38549,14 +38947,14 @@ function migrateFile(ownerRoot, roots, file4, now, problems) {
   }
   try {
     for (const root of here) {
-      const legacy = join20(root, file4.name);
-      const link2 = lstatSync17(legacy).isSymbolicLink();
+      const legacy = join22(root, file4.name);
+      const link2 = lstatSync18(legacy).isSymbolicLink();
       const merged = link2 ? "legacy-unreadable" : file4.merge(ownerRoot, legacy);
       if (merged === "merged") removeStateEntry(root, legacy);
       else if (merged === "legacy-unreadable") keepUnreadable(ownerRoot, root, file4.name);
       else {
         problems.push(
-          `${join20(ownerRoot, file4.name)} is unreadable, so ${legacy} was not merged: inspect or remove the owner file`
+          `${join22(ownerRoot, file4.name)} is unreadable, so ${legacy} was not merged: inspect or remove the owner file`
         );
       }
     }
@@ -38585,7 +38983,7 @@ function migrateOwnerState(ownerRoot, now) {
     }
     for (const entry of legacyEntries(ownerRoot)) {
       problems.push(
-        `${join20(ownerRoot, entry)} is an old state file Studio could not read: no crew starts until the owner inspects and removes it`
+        `${join22(ownerRoot, entry)} is an old state file Studio could not read: no crew starts until the owner inspects and removes it`
       );
     }
   } catch (e) {
@@ -38595,17 +38993,17 @@ function migrateOwnerState(ownerRoot, now) {
 }
 
 // src/pause.ts
-import { lstatSync as lstatSync18, readFileSync as readFileSync21 } from "node:fs";
-import { join as join21 } from "node:path";
+import { lstatSync as lstatSync19, readFileSync as readFileSync22 } from "node:fs";
+import { join as join23 } from "node:path";
 var PAUSE_FILE = "pause.json";
 var PAUSED_LINE = "paused: no crew starts and nothing is merged until the owner runs studio resume";
 function readPause(root) {
-  const file4 = join21(root, PAUSE_FILE);
+  const file4 = join23(root, PAUSE_FILE);
   try {
-    const st = lstatSync18(file4, { throwIfNoEntry: false });
+    const st = lstatSync19(file4, { throwIfNoEntry: false });
     if (st === void 0) return { paused: false };
     if (!st.isFile()) return { paused: true };
-    const raw = JSON.parse(readFileSync21(file4, "utf8"));
+    const raw = JSON.parse(readFileSync22(file4, "utf8"));
     const at2 = raw?.at;
     return typeof at2 === "string" && !Number.isNaN(Date.parse(at2)) ? { paused: true, at: at2 } : { paused: true };
   } catch {
@@ -38613,44 +39011,44 @@ function readPause(root) {
   }
 }
 function setPause(root, now) {
-  writeStateFile(root, join21(root, PAUSE_FILE), `${JSON.stringify({ at: now.toISOString() })}
+  writeStateFile(root, join23(root, PAUSE_FILE), `${JSON.stringify({ at: now.toISOString() })}
 `);
 }
 function clearPause(root) {
-  removeStateEntry(root, join21(root, PAUSE_FILE));
+  removeStateEntry(root, join23(root, PAUSE_FILE));
 }
 
 // src/rea-consent.ts
 var import_yaml10 = __toESM(require_dist(), 1);
 import {
-  lstatSync as lstatSync20,
+  lstatSync as lstatSync21,
   mkdirSync as mkdirSync5,
-  readFileSync as readFileSync23,
+  readFileSync as readFileSync24,
   realpathSync as realpathSync5,
   renameSync as renameSync12,
   rmSync as rmSync6,
   writeFileSync as writeFileSync8
 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { dirname as dirname7, isAbsolute as isAbsolute7, join as join23, resolve as resolve5 } from "node:path";
+import { homedir as homedir6 } from "node:os";
+import { dirname as dirname7, isAbsolute as isAbsolute8, join as join25, resolve as resolve6 } from "node:path";
 
 // src/rea-install.ts
-import { lstatSync as lstatSync19, readFileSync as readFileSync22, renameSync as renameSync11 } from "node:fs";
-import { isAbsolute as isAbsolute6, join as join22, normalize as normalize2 } from "node:path";
+import { lstatSync as lstatSync20, readFileSync as readFileSync23, renameSync as renameSync11 } from "node:fs";
+import { isAbsolute as isAbsolute7, join as join24, normalize as normalize2 } from "node:path";
 var REA_RECORD = "studio-rea.json";
 var REGISTRY_TARBALL = (v) => `https://registry.npmjs.org/${REA_PACKAGE}/-/${REA_PACKAGE}-${v}.tgz`;
 var INTEGRITY_RE = /^sha512-[A-Za-z0-9+/]{86}==$/;
 var NPM_TIMEOUT_MS = 6e5;
 var reaInstallDir = (ownerRoot, version2) => {
   if (!REA_VERSION_RE.test(version2)) throw new Error(`rea_version ${version2} is not exact`);
-  return join22(ownerRoot, "rea", version2);
+  return join24(ownerRoot, "rea", version2);
 };
 var NPMRC_USER = ".npmrc-user";
 var NPMRC_GLOBAL = ".npmrc-global";
 function npmStagingEnv(ownerRoot, staging, path10) {
-  const home = ensureStateDir(ownerRoot, join22(staging, ".home"));
-  const userconfig = join22(staging, NPMRC_USER);
-  const globalconfig = join22(staging, NPMRC_GLOBAL);
+  const home = ensureStateDir(ownerRoot, join24(staging, ".home"));
+  const userconfig = join24(staging, NPMRC_USER);
+  const globalconfig = join24(staging, NPMRC_GLOBAL);
   writeStateFile(ownerRoot, userconfig, "");
   writeStateFile(ownerRoot, globalconfig, "");
   return {
@@ -38658,7 +39056,7 @@ function npmStagingEnv(ownerRoot, staging, path10) {
     HOME: home,
     npm_config_userconfig: userconfig,
     npm_config_globalconfig: globalconfig,
-    npm_config_cache: join22(ownerRoot, "rea", "npm-cache"),
+    npm_config_cache: join24(ownerRoot, "rea", "npm-cache"),
     npm_config_update_notifier: "false",
     npm_config_fund: "false",
     npm_config_audit: "false"
@@ -38688,7 +39086,7 @@ async function installRea(o2) {
     }
     writeStateFile(
       o2.ownerRoot,
-      join22(staging, "package.json"),
+      join24(staging, "package.json"),
       `${JSON.stringify({ private: true, dependencies: { [REA_PACKAGE]: o2.version } }, null, 2)}
 `
     );
@@ -38716,12 +39114,12 @@ async function installRea(o2) {
     }
     writeStateFile(
       o2.ownerRoot,
-      join22(staging, REA_RECORD),
+      join24(staging, REA_RECORD),
       `${JSON.stringify({ package: REA_PACKAGE, version: o2.version, integrity, ...o2.full === true ? { full: true } : {}, installedAt: o2.now.toISOString() }, null, 2)}
 `
     );
     for (const p of [".home", NPMRC_USER, NPMRC_GLOBAL]) {
-      removeStateEntry(o2.ownerRoot, join22(staging, p));
+      removeStateEntry(o2.ownerRoot, join24(staging, p));
     }
     const previous = `${dir}.previous`;
     removeStateEntry(o2.ownerRoot, previous);
@@ -38748,19 +39146,19 @@ async function installRea(o2) {
   }
 }
 function lockedPackage(dir) {
-  const lock = JSON.parse(readFileSync22(join22(dir, "package-lock.json"), "utf8"));
+  const lock = JSON.parse(readFileSync23(join24(dir, "package-lock.json"), "utf8"));
   return lock.packages?.[`node_modules/${REA_PACKAGE}`] ?? {};
 }
 var existsNoFollow = (p) => {
   try {
-    lstatSync19(p);
+    lstatSync20(p);
     return true;
   } catch {
     return false;
   }
 };
 function ownedPlain(path10, kind, uid) {
-  const st = lstatSync19(path10);
+  const st = lstatSync20(path10);
   if (st.isSymbolicLink()) throw new Error(`${path10} is a symbolic link`);
   if (kind === "dir" ? !st.isDirectory() : !st.isFile())
     throw new Error(`${path10} is not a ${kind}`);
@@ -38772,9 +39170,9 @@ function verifyReaInstall(ownerRoot, version2, uid = process.getuid?.(), mode = 
   const hint = `it installs on the first launch that needs it, after one confirmation by the owner (or studio setup research) of ${REA_PACKAGE}@${version2}`;
   try {
     ownedPlain(dir, "dir", uid);
-    ownedPlain(join22(dir, REA_RECORD), "file", uid);
-    ownedPlain(join22(dir, "package-lock.json"), "file", uid);
-    const record2 = JSON.parse(readFileSync22(join22(dir, REA_RECORD), "utf8"));
+    ownedPlain(join24(dir, REA_RECORD), "file", uid);
+    ownedPlain(join24(dir, "package-lock.json"), "file", uid);
+    const record2 = JSON.parse(readFileSync23(join24(dir, REA_RECORD), "utf8"));
     if (mode === "full" && record2.full !== true) {
       throw new Error(
         "installed for strict mode (static tools only); trust mode needs the full install"
@@ -38793,25 +39191,25 @@ function verifyReaInstall(ownerRoot, version2, uid = process.getuid?.(), mode = 
     if (locked.version !== version2 || locked.integrity !== record2.integrity || locked.resolved !== REGISTRY_TARBALL(version2)) {
       throw new Error("the lockfile does not match the install record");
     }
-    if (mode === "static" && existsNoFollow(join22(dir, "node_modules", "frida"))) {
+    if (mode === "static" && existsNoFollow(join24(dir, "node_modules", "frida"))) {
       throw new Error("the install holds the optional native dependency frida");
     }
-    const pkgDir = join22(dir, "node_modules", REA_PACKAGE);
-    ownedPlain(join22(dir, "node_modules"), "dir", uid);
+    const pkgDir = join24(dir, "node_modules", REA_PACKAGE);
+    ownedPlain(join24(dir, "node_modules"), "dir", uid);
     ownedPlain(pkgDir, "dir", uid);
-    ownedPlain(join22(pkgDir, "package.json"), "file", uid);
-    const pkg = JSON.parse(readFileSync22(join22(pkgDir, "package.json"), "utf8"));
+    ownedPlain(join24(pkgDir, "package.json"), "file", uid);
+    const pkg = JSON.parse(readFileSync23(join24(pkgDir, "package.json"), "utf8"));
     if (pkg.name !== REA_PACKAGE || pkg.version !== version2) {
       throw new Error("the installed package is another one");
     }
     const bin2 = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.[REA_PACKAGE];
-    if (typeof bin2 !== "string" || isAbsolute6(bin2) || normalize2(bin2).split(/[\\/]/).includes("..")) {
+    if (typeof bin2 !== "string" || isAbsolute7(bin2) || normalize2(bin2).split(/[\\/]/).includes("..")) {
       throw new Error("the package names no usable command");
     }
     const parts = normalize2(bin2).split(/[\\/]/).filter((p) => p !== "" && p !== ".");
     let at2 = pkgDir;
     for (const [i2, part] of parts.entries()) {
-      at2 = join22(at2, part);
+      at2 = join24(at2, part);
       ownedPlain(at2, i2 === parts.length - 1 ? "file" : "dir", uid);
     }
     return { dir, entry: at2, integrity: record2.integrity };
@@ -38821,16 +39219,16 @@ function verifyReaInstall(ownerRoot, version2, uid = process.getuid?.(), mode = 
   }
 }
 function reaRunDirs(stateRoot, id) {
-  const root = join22(stateRoot, "rea", id);
+  const root = join24(stateRoot, "rea", id);
   return {
     root,
-    home: join22(root, "home"),
-    tmp: join22(root, "tmp"),
-    cache: join22(root, "cache"),
-    config: join22(root, "config"),
-    data: join22(root, "data"),
-    state: join22(root, "state"),
-    cwd: join22(root, "cwd")
+    home: join24(root, "home"),
+    tmp: join24(root, "tmp"),
+    cache: join24(root, "cache"),
+    config: join24(root, "config"),
+    data: join24(root, "data"),
+    state: join24(root, "state"),
+    cwd: join24(root, "cwd")
   };
 }
 function prepareReaRun(stateRoot, id) {
@@ -38856,7 +39254,7 @@ function writeReaSpec(stateRoot, id, o2) {
     ...o2.lang === void 0 ? {} : { lang: o2.lang },
     env: { ...o2.env }
   };
-  const file4 = join22(stateRoot, "settings", `${id}.rea.json`);
+  const file4 = join24(stateRoot, "settings", `${id}.rea.json`);
   writeStateFile(stateRoot, file4, `${JSON.stringify(spec, null, 2)}
 `);
   return file4;
@@ -38865,9 +39263,9 @@ var REA_ALLOW_FILE = "rea-allow.json";
 function readReaAllow(stateRoot) {
   let raw;
   try {
-    const file4 = join22(stateRoot, REA_ALLOW_FILE);
-    if (lstatSync19(file4).isSymbolicLink()) return {};
-    raw = JSON.parse(readFileSync22(file4, "utf8"));
+    const file4 = join24(stateRoot, REA_ALLOW_FILE);
+    if (lstatSync20(file4).isSymbolicLink()) return {};
+    raw = JSON.parse(readFileSync23(file4, "utf8"));
   } catch {
     return {};
   }
@@ -38889,7 +39287,7 @@ function updateReaAllow(stateRoot, id, change) {
   const next = REA_CLASS_NAMES.filter((c3) => now.has(c3));
   if (next.length === 0) delete all[id];
   else all[id] = next;
-  writeStateFile(stateRoot, join22(stateRoot, REA_ALLOW_FILE), `${JSON.stringify(all, null, 2)}
+  writeStateFile(stateRoot, join24(stateRoot, REA_ALLOW_FILE), `${JSON.stringify(all, null, 2)}
 `);
   return next;
 }
@@ -38900,7 +39298,7 @@ var TRUST_NOTICE_FILE = "rea-trust-notice.json";
 var SETUP_SKIP_FILE = "rea-setup-skipped.json";
 function setupSkipped(ownerRoot) {
   try {
-    return lstatSync20(join23(ownerRoot, SETUP_SKIP_FILE)).isFile();
+    return lstatSync21(join25(ownerRoot, SETUP_SKIP_FILE)).isFile();
   } catch {
     return false;
   }
@@ -38909,7 +39307,7 @@ function recordSetupSkip(ownerRoot, now) {
   ensureStateDir(ownerRoot, ownerRoot);
   writeStateFile(
     ownerRoot,
-    join23(ownerRoot, SETUP_SKIP_FILE),
+    join25(ownerRoot, SETUP_SKIP_FILE),
     `${JSON.stringify({ skippedAt: now.toISOString() })}
 `
   );
@@ -38929,24 +39327,24 @@ var ReaInstallNeeded = class extends Error {
 var consentKey = (version2, mode) => `${version2}:${mode}`;
 function readConsentEntry(ownerRoot, version2, mode, home) {
   try {
-    const file4 = join23(ownerRoot, CONSENT_FILE);
-    if (!lstatSync20(file4).isFile()) return void 0;
-    const raw = JSON.parse(readFileSync23(file4, "utf8"));
+    const file4 = join25(ownerRoot, CONSENT_FILE);
+    if (!lstatSync21(file4).isFile()) return void 0;
+    const raw = JSON.parse(readFileSync24(file4, "utf8"));
     const e = raw?.[consentKey(version2, mode)];
     const a2 = e?.answer;
     if (a2 !== "yes" && a2 !== "no") return void 0;
-    const folder = home !== void 0 && typeof e?.folder === "string" && e.folder === join23(home, "analysis") ? e.folder : void 0;
+    const folder = home !== void 0 && typeof e?.folder === "string" && e.folder === join25(home, "analysis") ? e.folder : void 0;
     return { answer: a2, ...folder === void 0 ? {} : { folder } };
   } catch {
     return void 0;
   }
 }
 function recordConsent(ownerRoot, version2, mode, answer2, now, extra = {}) {
-  const file4 = join23(ownerRoot, CONSENT_FILE);
+  const file4 = join25(ownerRoot, CONSENT_FILE);
   let raw = {};
   try {
-    if (lstatSync20(file4).isFile())
-      raw = JSON.parse(readFileSync23(file4, "utf8"));
+    if (lstatSync21(file4).isFile())
+      raw = JSON.parse(readFileSync24(file4, "utf8"));
   } catch {
     raw = {};
   }
@@ -38960,13 +39358,13 @@ function recordConsent(ownerRoot, version2, mode, answer2, now, extra = {}) {
 }
 function expandHome(dir, home) {
   if (dir === "~") return home;
-  if (dir.startsWith("~/")) return join23(home, dir.slice(2));
+  if (dir.startsWith("~/")) return join25(home, dir.slice(2));
   return dir;
 }
 function addResearchRoot(owner, dir, ownerRoot) {
-  const home = owner.homedir ?? homedir5();
-  const abs = resolve5(expandHome(dir.trim(), home));
-  if (!isAbsolute7(expandHome(dir.trim(), home)) || new RegExp("\\p{Cc}", "u").test(abs)) {
+  const home = owner.homedir ?? homedir6();
+  const abs = resolve6(expandHome(dir.trim(), home));
+  if (!isAbsolute8(expandHome(dir.trim(), home)) || new RegExp("\\p{Cc}", "u").test(abs)) {
     throw new Error("the analysis folder must be an absolute path or start with ~/");
   }
   const env = owner.env ?? process.env;
@@ -38979,7 +39377,7 @@ function addResearchRoot(owner, dir, ownerRoot) {
   };
   refuse2(abs);
   mkdirSync5(abs, { recursive: true, mode: 448 });
-  const st = lstatSync20(abs);
+  const st = lstatSync21(abs);
   const uid = owner.uid ?? process.getuid?.();
   if (st.isSymbolicLink() || !st.isDirectory()) {
     throw new Error(
@@ -39002,7 +39400,7 @@ function addResearchRoot(owner, dir, ownerRoot) {
   const file4 = ownerConfigFile(owner);
   let text2 = "";
   try {
-    text2 = readFileSync23(file4, "utf8");
+    text2 = readFileSync24(file4, "utf8");
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
@@ -39011,7 +39409,7 @@ function addResearchRoot(owner, dir, ownerRoot) {
   if (!(0, import_yaml10.isMap)(doc.contents)) throw new Error(`${file4}: not a map; nothing changed`);
   const current = doc.get("research_roots");
   const roots = (0, import_yaml10.isSeq)(current) ? current.items.map((i2) => String(i2.value ?? i2)) : [];
-  if (roots.some((r) => within(pathKey(real), pathKey(resolve5(r))))) return real;
+  if (roots.some((r) => within(pathKey(real), pathKey(resolve6(r))))) return real;
   doc.set("research_roots", [...roots, real]);
   mkdirSync5(dirname7(file4), { recursive: true, mode: 448 });
   const tmp = `${file4}.${process.pid}.${Date.now()}.tmp`;
@@ -39026,8 +39424,8 @@ function addResearchRoot(owner, dir, ownerRoot) {
   return real;
 }
 function researchFolder(dir, roots, home) {
-  const abs = resolve5(expandHome(dir.trim(), home));
-  if (!isAbsolute7(expandHome(dir.trim(), home)) || new RegExp("\\p{Cc}", "u").test(abs)) {
+  const abs = resolve6(expandHome(dir.trim(), home));
+  if (!isAbsolute8(expandHome(dir.trim(), home)) || new RegExp("\\p{Cc}", "u").test(abs)) {
     throw new Error("--artifacts must be an absolute path or start with ~/");
   }
   let real;
@@ -39054,19 +39452,19 @@ function researchFolder(dir, roots, home) {
 }
 var PANE_CONFIRM_FILE = "rea-confirm.json";
 function importPaneConfirmation(ownerRoot, home, now, uid = process.getuid?.()) {
-  const file4 = join23(ownerRoot, PANE_CONFIRM_FILE);
+  const file4 = join25(ownerRoot, PANE_CONFIRM_FILE);
   let raw;
   try {
-    const st = lstatSync20(file4);
+    const st = lstatSync21(file4);
     if (!st.isFile() || (st.mode & 18) !== 0) return false;
     if (uid !== void 0 && st.uid !== uid) return false;
-    raw = JSON.parse(readFileSync23(file4, "utf8"));
+    raw = JSON.parse(readFileSync24(file4, "utf8"));
   } catch {
     return false;
   }
   if (typeof raw?.version !== "string" || !/^\d+\.\d+\.\d+$/.test(raw.version)) return false;
   if (raw.mode !== "full" && raw.mode !== "static") return false;
-  if (raw.folder !== void 0 && raw.folder !== join23(home, "analysis")) return false;
+  if (raw.folder !== void 0 && raw.folder !== join25(home, "analysis")) return false;
   recordConsent(ownerRoot, raw.version, raw.mode, "yes", now, {
     by: "pane",
     ...typeof raw.folder === "string" ? { folder: raw.folder } : {}
@@ -39105,7 +39503,7 @@ async function ensureRea(o2) {
       "studio research install --yes and --folder count only in your own terminal; or confirm with the button in the Studio pane"
     );
   }
-  const home = o2.owner.homedir ?? homedir5();
+  const home = o2.owner.homedir ?? homedir6();
   importPaneConfirmation(o2.ownerRoot, home, o2.now, o2.uid);
   const remembered = readConsentEntry(o2.ownerRoot, version2, mode, home);
   let answer2 = o2.yes === true ? "yes" : remembered?.answer;
@@ -39163,10 +39561,10 @@ function reaDecision(o2) {
   }
   const what = `${REA_PACKAGE} ${version2} (${mode === "full" ? "trust" : "strict"} mode)`;
   if (installed && !needsFolder) return { decision: "ready", line: `${what} installed` };
-  const home = o2.owner.homedir ?? homedir5();
+  const home = o2.owner.homedir ?? homedir6();
   let pane = false;
   try {
-    pane = lstatSync20(join23(o2.ownerRoot, PANE_CONFIRM_FILE)).isFile();
+    pane = lstatSync21(join25(o2.ownerRoot, PANE_CONFIRM_FILE)).isFile();
   } catch {
     pane = false;
   }
@@ -39186,9 +39584,9 @@ function reaDecision(o2) {
   return { decision: "needs-owner", line: installNeededLine(o2.item, needsFolder) };
 }
 function trustNoticeDue(ownerRoot, now) {
-  const file4 = join23(ownerRoot, TRUST_NOTICE_FILE);
+  const file4 = join25(ownerRoot, TRUST_NOTICE_FILE);
   try {
-    lstatSync20(file4);
+    lstatSync21(file4);
     return false;
   } catch {
     try {
@@ -39203,8 +39601,8 @@ function trustNoticeDue(ownerRoot, now) {
 
 // src/role-memory.ts
 import { randomBytes as randomBytes8 } from "node:crypto";
-import { lstatSync as lstatSync21, mkdirSync as mkdirSync6, readFileSync as readFileSync24, renameSync as renameSync13, rmSync as rmSync7, writeFileSync as writeFileSync9 } from "node:fs";
-import { dirname as dirname8, join as join24 } from "node:path";
+import { lstatSync as lstatSync22, mkdirSync as mkdirSync6, readFileSync as readFileSync25, renameSync as renameSync13, rmSync as rmSync7, writeFileSync as writeFileSync9 } from "node:fs";
+import { dirname as dirname8, join as join26 } from "node:path";
 var MAX_LESSON_LINES = 40;
 var MAX_LESSON_CHARS = 300;
 var MAX_PENDING = 200;
@@ -39255,7 +39653,7 @@ function cleanEvidence(e) {
   };
   return Object.keys(out).length === 0 ? void 0 : out;
 }
-var lessonsFile = (stateRoot) => join24(stateRoot, "lessons.json");
+var lessonsFile = (stateRoot) => join26(stateRoot, "lessons.json");
 var LESSONS_LOCK = "lessons.lock";
 var LESSONS_LOCK_STALE_MS = 3e4;
 function readFile(stateRoot) {
@@ -39263,7 +39661,7 @@ function readFile(stateRoot) {
   assertStatePath(stateRoot, file4);
   let text2;
   try {
-    text2 = readFileSync24(file4, "utf8");
+    text2 = readFileSync25(file4, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return { next: 1, lessons: [] };
     throw new Error("lessons.json cannot be read");
@@ -39407,12 +39805,12 @@ function roleFile(projectDir2, role) {
   let at2 = projectDir2;
   const segments = [".studio", "roles", `${role}.md`];
   for (const [i2, seg] of segments.entries()) {
-    at2 = join24(at2, seg);
+    at2 = join26(at2, seg);
     let st;
     try {
-      st = lstatSync21(at2);
+      st = lstatSync22(at2);
     } catch (e) {
-      if (e.code === "ENOENT") return join24(projectDir2, ...segments);
+      if (e.code === "ENOENT") return join26(projectDir2, ...segments);
       throw new Error(`the role file cannot be reached (${e.code})`);
     }
     if (st.isSymbolicLink()) throw new Error(`${at2} is a link; refusing`);
@@ -39425,7 +39823,7 @@ function roleFile(projectDir2, role) {
 function readRole(projectDir2, role) {
   const file4 = roleFile(projectDir2, role);
   try {
-    return readFileSync24(file4, "utf8");
+    return readFileSync25(file4, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return "";
     throw e;
@@ -39511,8 +39909,8 @@ function readRoleMemory(projectDir2, role) {
 }
 
 // src/solutions.ts
-import { lstatSync as lstatSync22, readdirSync as readdirSync9, readFileSync as readFileSync25 } from "node:fs";
-import { join as join25 } from "node:path";
+import { lstatSync as lstatSync23, readdirSync as readdirSync9, readFileSync as readFileSync26 } from "node:fs";
+import { join as join27 } from "node:path";
 var MAX_FILE_BYTES = 64 * 1024;
 var MAX_FILES = 1e3;
 var MIN_WORD = 3;
@@ -39524,7 +39922,7 @@ var wordsOf = (text2) => [
 ];
 var isReal = (path10, test) => {
   try {
-    const st = lstatSync22(path10);
+    const st = lstatSync23(path10);
     return test === "dir" ? st.isDirectory() : st.isFile() && st.size <= MAX_FILE_BYTES;
   } catch {
     return false;
@@ -39532,15 +39930,15 @@ var isReal = (path10, test) => {
 };
 function searchSolutions(projectDir2, query, limit = 5) {
   const words2 = wordsOf(query);
-  const studio = join25(projectDir2, ".studio");
-  const dir = join25(studio, "solutions");
+  const studio = join27(projectDir2, ".studio");
+  const dir = join27(studio, "solutions");
   if (words2.length === 0 || !isReal(studio, "dir") || !isReal(dir, "dir")) return [];
   const hits = [];
   for (const name of readdirSync9(dir).sort().slice(0, MAX_FILES)) {
-    if (!SAFE_NAME2.test(name) || !isReal(join25(dir, name), "file")) continue;
+    if (!SAFE_NAME2.test(name) || !isReal(join27(dir, name), "file")) continue;
     let text2;
     try {
-      text2 = readFileSync25(join25(dir, name), "utf8");
+      text2 = readFileSync26(join27(dir, name), "utf8");
     } catch {
       continue;
     }
@@ -39561,23 +39959,23 @@ import {
   closeSync as closeSync6,
   copyFileSync,
   existsSync as existsSync7,
-  lstatSync as lstatSync23,
+  lstatSync as lstatSync24,
   mkdirSync as mkdirSync7,
   openSync as openSync6,
   readdirSync as readdirSync10,
-  readFileSync as readFileSync27,
+  readFileSync as readFileSync28,
   realpathSync as realpathSync7,
   rmdirSync,
   unlinkSync as unlinkSync5
 } from "node:fs";
-import { dirname as dirname10, join as join29, resolve as resolve6, sep as sep5 } from "node:path";
+import { dirname as dirname10, join as join31, resolve as resolve7, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/crew-accounts.ts
 import { createHash as createHash4 } from "node:crypto";
-import { dirname as dirname9, join as join26 } from "node:path";
+import { dirname as dirname9, join as join28 } from "node:path";
 var PRUNE_BUDGET = 2e4;
-var TREE_SOURCE = () => join26(dirname9(CREW_HOST_BIN), "studio-tree.cs");
+var TREE_SOURCE = () => join28(dirname9(CREW_HOST_BIN), "studio-tree.cs");
 var CREW_PREFIX_RE = /^[A-Za-z][A-Za-z0-9_-]{0,12}$/;
 var CREW_DESCRIPTION = "Studio crew (one job)";
 var GROUP_DESCRIPTION = "Studio crews: one local user per job";
@@ -40091,12 +40489,12 @@ import {
 } from "node:net";
 
 // src/worker-deny.ts
-import { existsSync as existsSync6, readFileSync as readFileSync26, realpathSync as realpathSync6 } from "node:fs";
+import { existsSync as existsSync6, readFileSync as readFileSync27, realpathSync as realpathSync6 } from "node:fs";
 import { isIP as isIP2 } from "node:net";
-import { isAbsolute as isAbsolute8, join as join27, posix } from "node:path";
+import { isAbsolute as isAbsolute9, join as join29, posix } from "node:path";
 var readText = (file4) => {
   try {
-    return readFileSync26(file4, "utf8");
+    return readFileSync27(file4, "utf8");
   } catch {
     return void 0;
   }
@@ -40250,7 +40648,7 @@ function enforceDeny(o2) {
         `deny path ${entry}: the whole drive ${target} is denied, because Windows drives ignore case and a narrower rule could be bypassed by another spelling`
       );
     } else {
-      if (!isAbsolute8(entry) || entry.includes("\\")) {
+      if (!isAbsolute9(entry) || entry.includes("\\")) {
         return { refused: `deny path ${entry} is not an absolute path` };
       }
       target = posix.normalize(entry).replace(/\/+$/, "") || "/";
@@ -40299,7 +40697,7 @@ function enforceDeny(o2) {
         /\/+$/,
         ""
       ) : posix.normalize(entry).replace(/\/+$/, "");
-      if (!isAbsolute8(target) || !defaults.some((d) => within(target, d))) {
+      if (!isAbsolute9(target) || !defaults.some((d) => within(target, d))) {
         return {
           refused: `allow_read ${entry} does not lie on a Windows file system of this machine`
         };
@@ -40914,31 +41312,31 @@ Write-Output 'ok: network lockdown (local ranges blocked, DNS resolvers on port 
 
 // src/relay-windows.ts
 import { posix as posix2, win32 } from "node:path";
-var join28 = (...parts) => parts[0]?.startsWith("/") === true ? posix2.join(...parts) : win32.join(...parts);
-var relayHomeDefault = (env) => join28(env.ProgramData ?? env.PROGRAMDATA ?? "C:\\ProgramData", "Studio", "relay");
-var relayMachineDefault = (env) => join28(env.ProgramFiles ?? env.PROGRAMFILES ?? "C:\\Program Files", "Studio", "relay");
-var machineCredFile = (machine) => join28(machine, "crew-credential.bin");
+var join30 = (...parts) => parts[0]?.startsWith("/") === true ? posix2.join(...parts) : win32.join(...parts);
+var relayHomeDefault = (env) => join30(env.ProgramData ?? env.PROGRAMDATA ?? "C:\\ProgramData", "Studio", "relay");
+var relayMachineDefault = (env) => join30(env.ProgramFiles ?? env.PROGRAMFILES ?? "C:\\Program Files", "Studio", "relay");
+var machineCredFile = (machine) => join30(machine, "crew-credential.bin");
 var brokerResultFiles = (machine) => ({
-  sweep: join28(machine, "broker", "answer.json"),
-  retire: join28(machine, "broker", "retire.json"),
-  fresh: join28(machine, "broker", "fresh.json")
+  sweep: join30(machine, "broker", "answer.json"),
+  retire: join30(machine, "broker", "retire.json"),
+  fresh: join30(machine, "broker", "fresh.json")
 });
 var brokerPlaces = (machine) => ({
-  treeSource: join28(machineStudio(machine), "bin", "studio-tree.cs"),
-  treeTemp: join28(machine, "broker", "tmp"),
+  treeSource: join30(machineStudio(machine), "bin", "studio-tree.cs"),
+  treeTemp: join30(machine, "broker", "tmp"),
   bodyFile: brokerBodyFile(machine)
 });
-var brokerBodyFile = (machine) => join28(machine, "broker", "crew-accounts.ps1");
+var brokerBodyFile = (machine) => join30(machine, "broker", "crew-accounts.ps1");
 var brokerTasks = (task) => ({
   sweep: task,
   retire: `${task} retire`,
   fresh: `${task} fresh`
 });
-var authorizedKeysFile = (machine) => join28(machine, "authorized_keys");
-var machineNode = (machine) => join28(machine, "node", "node.exe");
-var machineStudio = (machine) => join28(machine, "studio");
-var machineStudioBin = (machine) => join28(machine, "studio", "bin", "studio");
-var machineConfig = (machine) => join28(machine, "config");
+var authorizedKeysFile = (machine) => join30(machine, "authorized_keys");
+var machineNode = (machine) => join30(machine, "node", "node.exe");
+var machineStudio = (machine) => join30(machine, "studio");
+var machineStudioBin = (machine) => join30(machine, "studio", "bin", "studio");
+var machineConfig = (machine) => join30(machine, "config");
 var forcedCommand = (machine, home) => `"${machineNode(machine)}" "${machineStudioBin(machine)}" relay serve --home "${home}"`;
 function sshdMatchBlock(o2) {
   const keys2 = authorizedKeysFile(o2.machine).replace(/\\/g, "/");
@@ -41160,13 +41558,13 @@ function relaySetupScript(o2) {
   const list2 = (ps) => `@(${ps.map(psQuote).join(", ")})`;
   const command = forcedCommand(o2.machine, o2.home);
   const block = sshdMatchBlock({ relayUser: o2.relayUser, machine: o2.machine, command });
-  const pluginSetup = `$env:XDG_CONFIG_HOME = ${psQuote(machineConfig(o2.machine))}; $env:XDG_STATE_HOME = ${psQuote(join28(o2.machine, "setup-state"))}; & ${psQuote(machineNode(o2.machine))} ${psQuote(machineStudioBin(o2.machine))} account setup-plugins
+  const pluginSetup = `$env:XDG_CONFIG_HOME = ${psQuote(machineConfig(o2.machine))}; $env:XDG_STATE_HOME = ${psQuote(join30(o2.machine, "setup-state"))}; & ${psQuote(machineNode(o2.machine))} ${psQuote(machineStudioBin(o2.machine))} account setup-plugins
 if ($LASTEXITCODE -ne 0) { throw 'the plugin setup failed' }
-$claude = ${psQuote(join28(machineConfig(o2.machine), "studio", "claude"))}
+$claude = ${psQuote(join30(machineConfig(o2.machine), "studio", "claude"))}
 foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
   if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }`;
-  return `${PRIOR_CAPTURE(o2.machine)}${o2.install === void 0 ? "" : installHead(o2.install, o2.relayUser, o2.crewPrefix)}#Requires -RunAsAdministrator
+  return withSteps(`${PRIOR_CAPTURE(o2.machine)}${o2.install === void 0 ? "" : installHead(o2.install, o2.relayUser, o2.crewPrefix)}#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
@@ -41194,12 +41592,14 @@ $dataStudio = Split-Path -Parent $home_
 $filesStudio = Split-Path -Parent $machine
 SafeFolder $home_ (Split-Path -Parent $dataStudio)
 SafeFolder $machine (Split-Path -Parent $filesStudio)
+Step 'the relay account and the group of the crew users'
 # The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
 # Studio's group of crew users (one user per job, made and deleted by the broker); what it carries
 # comes once the admin-only copy of Studio is in place.
 $readPaths = ${list2(o2.readPaths)}
-${crewGroupMake()}# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew users read
+${crewGroupMake()}Step 'the admin-only tree: Node.js and Studio'
+# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew users read
 # Node.js and Studio only.
 $tree = 'ContainerInherit, ObjectInherit'
 $rx = 'ReadAndExecute, Synchronize'
@@ -41215,9 +41615,12 @@ if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LA
 icacls ${psQuote(machineStudio(o2.machine))} /reset /T /C /L /Q | Out-Null
 # The compiler of the tree deleter writes here, as SYSTEM or as this setup: administrators only.
 StrictFolder (Join-Path $machine 'broker\\tmp') @()
+Step "the crew users' group: firewall rule, logon rights, read grants"
 # What the group carries, and the crew users of earlier versions or a crash go: with the tree
 # deleter compiled from the admin-only copy just made.
-${crewGroupFinish()}${lockdownSection(o2.lockdown === void 0 ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o2.lockdown, "@($relaySid, $groupSid)")}${POINT_AND_PRINT}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
+${crewGroupFinish()}Step 'network lockdown and printer drivers'
+${lockdownSection(o2.lockdown === void 0 ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o2.lockdown, "@($relaySid, $groupSid)")}${POINT_AND_PRINT}Step 'the relay home'
+# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
 # the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
 # point among them or just below the home.
 StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
@@ -41227,6 +41630,7 @@ StrictFolder (Join-Path $home_ 'state') @(@($relaySid, 'ReadAndExecute, CreateFi
 # A crew user's password is sealed for this machine by the fresh broker, per job; one of a crew user
 # of an earlier version goes.
 Remove-Item -LiteralPath ${psQuote(machineCredFile(o2.machine))} -Force -ErrorAction SilentlyContinue
+Step 'the broker tasks'
 # The brokers: as SYSTEM, with no argument, each its script in its action, so no file of it exists:
 # one ends every process of the crew users, one also deletes them with their profiles, one also
 # makes the fresh crew user of a job. Only the relay account (and administrators) may start them;
@@ -41248,9 +41652,8 @@ $action.Path = 'powershell.exe'
 $action.Arguments = $brokerArgs
 $null = $folder.RegisterTaskDefinition(${psQuote(brokerTasks(o2.task)[op])}, $def, 6, 'SYSTEM', $null, 5, $sddl)
 `
-  ).join(
-    ""
-  )}# WebDAV paths (\\\\host@80\\) pass the crew user's firewall rule through the WebClient service:
+  ).join("")}Step 'WebClient off, and the record of what was there before'
+# WebDAV paths (\\\\host@80\\) pass the crew user's firewall rule through the WebClient service:
 # it is stopped and disabled.
 Write-Output 'Stopping and disabling the WebClient service (WebDAV), which the crew sandbox does not hold.'
 if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
@@ -41258,9 +41661,19 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Set-Service -Name WebClient -StartupType Disabled
 }
 # What this machine had before, and what the install did: studio relay uninstall reads it.
-${recordSnippet({ machine: o2.machine, spoolerDisabled: o2.install?.disableSpooler === true, firewall: o2.lockdown !== null })}# The pinned plugins in the crew Claude config dir of the relay home.
+${recordSnippet({ machine: o2.machine, spoolerDisabled: o2.install?.disableSpooler === true, firewall: o2.lockdown !== null })}Step 'the pinned plugins for crews'
+# The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
-${o2.install === void 0 ? setupTail(block) : installTail(block, o2.install)}`;
+${o2.install === void 0 ? setupTail(block) : installTail(block, o2.install)}`);
+}
+function withSteps(script) {
+  const total = script.split("\n").filter((l) => /^Step ['"]/.test(l)).length;
+  const head = "#Requires -RunAsAdministrator\n";
+  const first = script.startsWith(head) ? head : "";
+  return `${first}$stepTotal = ${total}
+$script:stepAt = 0
+function Step([string]$what) { $script:stepAt++; Write-Output "[$($script:stepAt)/$stepTotal] $what" }
+${script.slice(first.length)}`;
 }
 var setupTail = (block) => `Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
 Write-Output @'
@@ -41295,7 +41708,7 @@ function NoRelayJob {
   if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
 }
 `;
-var installRecordFile = (machine) => join28(machine, "install-record.json");
+var installRecordFile = (machine) => join30(machine, "install-record.json");
 var PRIOR_CAPTURE = (machine) => `# What this machine had before Studio changed it: the first install records it for uninstall.
 function ServiceState([string]$name) {
   $s = Get-Service -Name $name -ErrorAction SilentlyContinue
@@ -41335,7 +41748,8 @@ function SshdOff {
 }
 # No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
 # could plant a link between the two. Every process of the relay account or a crew user counts.
-${relayJobFunctions({ relayUser, crewPrefix: crewPrefix2, forceStop: i2.forceStop === true, what: "install" })}# Before sshd stops: a running job is refused while the lead can still reach it.
+${relayJobFunctions({ relayUser, crewPrefix: crewPrefix2, forceStop: i2.forceStop === true, what: "install" })}Step 'no relay job may run while the install works'
+# Before sshd stops: a running job is refused while the lead can still reach it.
 NoRelayJob
 try {
 function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
@@ -41347,12 +41761,14 @@ function Need([string]$what, [scriptblock]$have, [string]$id) {
   Fresh
   if (-not (& $have)) { throw "$what is still missing after winget install $id; install it by hand" }
 }
+Step 'prerequisites: Git, Claude Code, the OpenSSH server'
 Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
 $priorSshdCapability = @{ name = [string]$ssh.Name; state = [string]$ssh.State }
 if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
+Step 'sshd stopped and closed until everything checked out'
 SshdOff
 # With sshd off no new job starts: once more, for one that started in between.
 NoRelayJob
@@ -41374,7 +41790,8 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 # studio relay end global
 `;
-  return `$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
+  return `Step 'sshd: its block (checked with sshd -t), the firewall rule, start'
+$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
 if (-not (Test-Path -LiteralPath $conf)) {
   # The first start of sshd writes its default config; it stays stopped afterwards.
   Start-Service sshd
@@ -41451,8 +41868,8 @@ function windowsCrewEnv(o2) {
   return {
     ...env,
     USERPROFILE: o2.homeDir,
-    APPDATA: join29(o2.homeDir, "AppData", "Roaming"),
-    LOCALAPPDATA: join29(o2.homeDir, "AppData", "Local"),
+    APPDATA: join31(o2.homeDir, "AppData", "Roaming"),
+    LOCALAPPDATA: join31(o2.homeDir, "AppData", "Local"),
     TEMP: o2.tmpDir,
     TMP: o2.tmpDir,
     HTTPS_PROXY: proxy,
@@ -41465,10 +41882,10 @@ function windowsCrewEnv(o2) {
     DISABLE_ERROR_REPORTING: "1"
   };
 }
-var nativeCrewDir = (env) => join29(env.ProgramFiles ?? env.PROGRAMFILES ?? "C:\\Program Files", "Studio crew");
+var nativeCrewDir = (env) => join31(env.ProgramFiles ?? env.PROGRAMFILES ?? "C:\\Program Files", "Studio crew");
 var nativeCrewPlaces = (crewDir) => ({
-  treeSource: join29(crewDir, "studio-tree.cs"),
-  treeTemp: join29(crewDir, "tmp")
+  treeSource: join31(crewDir, "studio-tree.cs"),
+  treeTemp: join31(crewDir, "tmp")
 });
 function psQuote(s) {
   if (/[\p{Cc}]/u.test(s)) throw new Error(`refusing a control character in ${JSON.stringify(s)}`);
@@ -41479,7 +41896,7 @@ function windowsSetupScript(o2) {
     throw new Error(`not a crew user prefix (at most 13 characters): ${o2.prefix}`);
   }
   const list2 = (ps) => `@(${ps.map(psQuote).join(", ")})`;
-  return `#Requires -RunAsAdministrator
+  return withSteps(`#Requires -RunAsAdministrator
 # Studio: the crew users of this Windows worker. Run once in an elevated Windows PowerShell
 # (powershell.exe). Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
@@ -41493,6 +41910,7 @@ foreach ($p in ${list2(o2.revokePaths ?? [])}) {
   }
 }
 $readPaths = ${list2(o2.readPaths)}
+Step 'Git, and the group of the crew users'
 ${crewGroupMake()}# The tree deleter, copied into a folder only administrators may change, with its compiler's
 # temporary folder: the elevated worker compiles it only from there.
 $crewDir = ${psQuote(o2.crewDir)}
@@ -41500,8 +41918,10 @@ SafeFolder $crewDir (Split-Path -Parent $crewDir)
 StrictFolder $crewDir @()
 StrictFolder (Join-Path $crewDir 'tmp') @()
 Copy-Item -LiteralPath ${psQuote(TREE_SOURCE())} -Destination (Join-Path $crewDir 'studio-tree.cs') -Force
-${crewGroupFinish()}${lockdownSection(o2.lockdown === void 0 ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o2.lockdown, "@($groupSid)")}${POINT_AND_PRINT}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
-`;
+Step "the crew users' group: firewall rule, logon rights, read grants"
+${crewGroupFinish()}Step 'network lockdown and printer drivers'
+${lockdownSection(o2.lockdown === void 0 ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o2.lockdown, "@($groupSid)")}${POINT_AND_PRINT}Write-Output "Done. Studio's crew users (group $($prefix)s) are ready. Next: studio worker --label <label>"
+`);
 }
 var OWNER_RIGHTS = "*S-1-3-4";
 var crewSid = (sid) => {
@@ -41525,7 +41945,7 @@ function rootRevokeSteps(sid, ownerSid2, path10) {
 function deepRevokeSteps(ownerSid2, path10) {
   if (!OWNER_SID_RE.test(ownerSid2)) throw new Error(`not a SID: ${ownerSid2}`);
   return [
-    [join29(path10, "*"), "/reset", "/T", "/C", "/L", "/Q"],
+    [join31(path10, "*"), "/reset", "/T", "/C", "/L", "/Q"],
     [path10, "/setowner", ownerSid2, "/T", "/C", "/L", "/Q"]
   ];
 }
@@ -41542,8 +41962,8 @@ function removeLinks(root) {
   const walk = (dir) => {
     if (!inside(realpathSync7(dir))) throw new Error(`${dir} leads outside ${root}`);
     for (const name of readdirSync10(dir)) {
-      const p = join29(dir, name);
-      const st = lstatSync23(p);
+      const p = join31(dir, name);
+      const st = lstatSync24(p);
       if (st.isSymbolicLink()) {
         try {
           unlinkSync5(p);
@@ -41560,7 +41980,7 @@ function removeLinks(root) {
 }
 function existsLink(p) {
   try {
-    lstatSync23(p);
+    lstatSync24(p);
     return true;
   } catch {
     return false;
@@ -41568,7 +41988,7 @@ function existsLink(p) {
 }
 function isDir2(p) {
   try {
-    return lstatSync23(p).isDirectory();
+    return lstatSync24(p).isDirectory();
   } catch {
     return false;
   }
@@ -41594,7 +42014,7 @@ var LOCK_FILE = "windows-crew.lock";
 var LOCK_STALE_MS3 = 10 * 6e4;
 function readGrantRecord(ownerRoot) {
   try {
-    const raw = JSON.parse(readFileSync27(join29(ownerRoot, RECORD_FILE), "utf8"));
+    const raw = JSON.parse(readFileSync28(join31(ownerRoot, RECORD_FILE), "utf8"));
     const a2 = raw.account;
     const n4 = a2?.notes;
     const notes = n4 !== void 0 && n4 !== null && Array.isArray(n4.problems) ? {
@@ -41615,7 +42035,7 @@ function readGrantRecord(ownerRoot) {
     return { paths: [] };
   }
 }
-var writeGrantRecord = (ownerRoot, r) => writeStateFile(ownerRoot, join29(ownerRoot, RECORD_FILE), `${JSON.stringify(r)}
+var writeGrantRecord = (ownerRoot, r) => writeStateFile(ownerRoot, join31(ownerRoot, RECORD_FILE), `${JSON.stringify(r)}
 `);
 var processExists = (pid) => {
   try {
@@ -41813,7 +42233,7 @@ var WindowsGrants = class {
     });
   }
 };
-var CREW_HOST_BIN = resolve6(
+var CREW_HOST_BIN = resolve7(
   dirname10(fileURLToPath2(import.meta.url)),
   "..",
   "bin",
@@ -41993,12 +42413,12 @@ var spawnKeeper = async (o2) => {
   }
 };
 function ownerFiles(stateRoot, name) {
-  const logs = ensureStateDir(stateRoot, join29(stateRoot, "logs"));
-  if (lstatSync23(logs).isSymbolicLink()) throw new Error(`${logs} is a link`);
+  const logs = ensureStateDir(stateRoot, join31(stateRoot, "logs"));
+  if (lstatSync24(logs).isSymbolicLink()) throw new Error(`${logs} is a link`);
   const files = {
-    out: join29(logs, `${name}.host.out`),
-    err: join29(logs, `${name}.host.err`),
-    keeper: join29(logs, `${name}.keeper.log`)
+    out: join31(logs, `${name}.host.out`),
+    err: join31(logs, `${name}.host.err`),
+    keeper: join31(logs, `${name}.keeper.log`)
   };
   for (const f3 of Object.values(files)) {
     removeStateEntry(stateRoot, f3);
@@ -42007,7 +42427,7 @@ function ownerFiles(stateRoot, name) {
   return files;
 }
 function keeperFile(stateRoot) {
-  const file4 = join29(stateRoot, "settings", KEEPER_FILE);
+  const file4 = join31(stateRoot, "settings", KEEPER_FILE);
   writeStateFile(stateRoot, file4, KEEPER_SCRIPT);
   return file4;
 }
@@ -42137,8 +42557,8 @@ async function probeWindowsResults(o2) {
   const account = await o2.grants.ready();
   const name = `probe-${randomBytes9(4).toString("hex")}`;
   const files = ownerFiles(o2.stateRoot, name);
-  const canary = join29(o2.ownerConfigDir, "crew-probe-canary");
-  const formerDir = join29(o2.stateRoot, "tmp", `${name}-former`);
+  const canary = join31(o2.ownerConfigDir, "crew-probe-canary");
+  const formerDir = join31(o2.stateRoot, "tmp", `${name}-former`);
   writeStateFile(dirname10(canary), canary, "canary\n");
   const host = async (spec, revoke = []) => {
     for (const f3 of Object.values(files)) removeStateEntry(o2.stateRoot, f3);
@@ -42172,7 +42592,7 @@ ${JSON.stringify(spec)}`,
   try {
     const mark = randomBytes9(8).toString("hex");
     ensureStateDir(o2.stateRoot, formerDir);
-    const file4 = join29(formerDir, "made-by-the-crew-user.txt");
+    const file4 = join31(formerDir, "made-by-the-crew-user.txt");
     await o2.grants.grant([{ path: formerDir, rights: "M" }]);
     const seeded = await host({ mode: "seed", seed: file4, env: o2.env });
     await o2.grants.revokeAll();
@@ -42185,10 +42605,10 @@ ${JSON.stringify(spec)}`,
         mark,
         mustNotRead: [canary, o2.ownerHome, ...o2.mustNotRead],
         mustNotWrite: [
-          join29(o2.ownerHome, `studio-probe-${mark}`),
+          join31(o2.ownerHome, `studio-probe-${mark}`),
           ...o2.crewConfigDir === void 0 ? [] : [
-            join29(o2.crewConfigDir, `studio-probe-${mark}`),
-            join29(o2.crewConfigDir, "plugins", `studio-probe-${mark}`)
+            join31(o2.crewConfigDir, `studio-probe-${mark}`),
+            join31(o2.crewConfigDir, "plugins", `studio-probe-${mark}`)
           ]
         ],
         direct: { host: "github.com", port: 443 },
@@ -42202,7 +42622,7 @@ ${JSON.stringify(spec)}`,
     if (!await host(spec)) return { problem: unfinished };
     let results;
     try {
-      const raw = JSON.parse(readFileSync27(files.out, "utf8"));
+      const raw = JSON.parse(readFileSync28(files.out, "utf8"));
       results = Array.isArray(raw) ? raw : void 0;
     } catch {
       results = void 0;
@@ -42224,53 +42644,53 @@ ${JSON.stringify(spec)}`,
     removeStateEntry(dirname10(canary), canary);
   }
 }
-var credFileIn = (ownerConfigDir2) => join29(ownerConfigDir2, "windows-crew.bin");
+var credFileIn = (ownerConfigDir2) => join31(ownerConfigDir2, "windows-crew.bin");
 function findClaude(path10) {
   for (const dir of (path10 ?? "").split(";")) {
     if (dir === "") continue;
     for (const name of ["claude.exe", "claude.cmd"]) {
-      const p = join29(dir, name);
+      const p = join31(dir, name);
       if (existsSync7(p)) return p;
     }
   }
   return void 0;
 }
 function setupReadPaths(o2) {
-  const plugin = resolve6(dirname10(CREW_HOST_BIN), "..");
+  const plugin = resolve7(dirname10(CREW_HOST_BIN), "..");
   return [
     .../* @__PURE__ */ new Set([
       dirname10(o2.node),
       plugin,
       ...o2.claude === void 0 ? [] : [dirname10(o2.claude)],
       ...o2.toolchains,
-      join29(o2.crewConfigDir, "skills"),
-      join29(o2.crewConfigDir, "plugins")
+      join31(o2.crewConfigDir, "skills"),
+      join31(o2.crewConfigDir, "plugins")
     ])
   ];
 }
 function runConfigDir(homeDir, shared) {
-  const dir = join29(homeDir, ".claude-run");
-  mkdirSync7(join29(dir, "plugins"), { recursive: true });
+  const dir = join31(homeDir, ".claude-run");
+  mkdirSync7(join31(dir, "plugins"), { recursive: true });
   const copy = (from, to) => {
     let st;
     try {
-      st = lstatSync23(from);
+      st = lstatSync24(from);
     } catch {
       return;
     }
     if (st.isSymbolicLink()) return;
     if (st.isDirectory()) {
       mkdirSync7(to, { recursive: true });
-      for (const n4 of readdirSync10(from)) copy(join29(from, n4), join29(to, n4));
+      for (const n4 of readdirSync10(from)) copy(join31(from, n4), join31(to, n4));
     } else if (st.isFile()) {
       copyFileSync(from, to);
     }
   };
-  copy(join29(shared, "skills"), join29(dir, "skills"));
+  copy(join31(shared, "skills"), join31(dir, "skills"));
   for (const f3 of ["installed_plugins.json", "known_marketplaces.json"]) {
-    copy(join29(shared, "plugins", f3), join29(dir, "plugins", f3));
+    copy(join31(shared, "plugins", f3), join31(dir, "plugins", f3));
   }
-  copy(join29(shared, "settings.json"), join29(dir, "settings.json"));
+  copy(join31(shared, "settings.json"), join31(dir, "settings.json"));
   return dir;
 }
 async function windowsWorker(o2) {
@@ -42313,7 +42733,7 @@ async function windowsWorker(o2) {
     close: () => proxy.close()
   };
   async function probe(mustNotRead) {
-    const tmp = ensureStateDir(o2.stateRoot, join29(o2.stateRoot, "tmp"));
+    const tmp = ensureStateDir(o2.stateRoot, join31(o2.stateRoot, "tmp"));
     const probeEnv = windowsCrewEnv({
       proxyPort: proxy.port,
       homeDir: tmp,
@@ -42336,13 +42756,13 @@ async function windowsWorker(o2) {
 
 // src/crew.ts
 var crewName = (item) => `studio-${item.role}-${item.id.toLowerCase()}`;
-var GUARD_BIN = resolve7(
+var GUARD_BIN = resolve8(
   dirname11(fileURLToPath3(import.meta.url)),
   "..",
   "bin",
   "studio-guard.mjs"
 );
-var REA_SERVER_BIN = resolve7(
+var REA_SERVER_BIN = resolve8(
   dirname11(fileURLToPath3(import.meta.url)),
   "..",
   "bin",
@@ -42368,7 +42788,7 @@ function githubHttpsUrl(repo) {
 }
 function cloneBranch(path10) {
   try {
-    const head = readFileSync28(join30(path10, ".git", "HEAD"), "utf8").trim();
+    const head = readFileSync29(join32(path10, ".git", "HEAD"), "utf8").trim();
     return /^ref: refs\/heads\/(.+)$/.exec(head)?.[1];
   } catch {
     return void 0;
@@ -42380,8 +42800,8 @@ async function prepareCheckout(stateRoot, projectDir2, item, ports, from = ITEM_
   if (from !== ITEM_BASE && from !== `studio/${item.id}`) {
     throw new Error(`invalid start branch for ${item.id}: ${JSON.stringify(from)}`);
   }
-  const clones = ensureStateDir(stateRoot, join30(stateRoot, "clones"));
-  const path10 = join30(clones, item.id);
+  const clones = ensureStateDir(stateRoot, join32(stateRoot, "clones"));
+  const path10 = join32(clones, item.id);
   const branch = `studio/${item.id}`;
   const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path10);
@@ -42412,11 +42832,11 @@ function removeOldReport(stateRoot, clone2, id) {
   assertItemId(id);
   let cur = clone2;
   for (const seg of [".studio", "reports", `${id}.md`]) {
-    cur = join30(cur, seg);
+    cur = join32(cur, seg);
     assertStatePath(stateRoot, cur);
     let st;
     try {
-      st = lstatSync24(cur);
+      st = lstatSync25(cur);
     } catch {
       return;
     }
@@ -42433,7 +42853,7 @@ function removeOldReport(stateRoot, clone2, id) {
 }
 function existsNoFollow2(p) {
   try {
-    lstatSync24(p);
+    lstatSync25(p);
     return true;
   } catch {
     return false;
@@ -42441,26 +42861,26 @@ function existsNoFollow2(p) {
 }
 function fileSize(p) {
   try {
-    return lstatSync24(p).size;
+    return lstatSync25(p).size;
   } catch {
     return 0;
   }
 }
 function isLink2(p) {
   try {
-    return lstatSync24(p).isSymbolicLink();
+    return lstatSync25(p).isSymbolicLink();
   } catch {
     return false;
   }
 }
 function writeHomeFile(homeDir, name, content) {
-  const target = join30(homeDir, name);
+  const target = join32(homeDir, name);
   const realHome = realpathSync8(homeDir);
   const parent = realpathSync8(dirname11(target));
   if (parent !== realHome && !parent.startsWith(realHome + sep6)) {
     throw new Error(`refusing to write outside the crew home: ${target}`);
   }
-  writeFileSync10(join30(parent, basename4(target)), content, { flag: "wx" });
+  writeFileSync10(join32(parent, basename4(target)), content, { flag: "wx" });
 }
 var unique2 = (xs) => [...new Set(xs)];
 function realOr2(p) {
@@ -42481,13 +42901,13 @@ function entries(dir) {
 }
 function skillInstalled(configDir, name) {
   if (!Array.isArray(entries(configDir))) return void 0;
-  const skills = join30(configDir, "skills");
+  const skills = join32(configDir, "skills");
   const direct = entries(skills);
   if (direct === void 0) return void 0;
   if (direct !== null) {
-    if (existsSync8(join30(skills, name, "SKILL.md"))) return true;
+    if (existsSync8(join32(skills, name, "SKILL.md"))) return true;
   }
-  const cache2 = join30(configDir, "plugins", "cache");
+  const cache2 = join32(configDir, "plugins", "cache");
   const top = entries(cache2);
   if (top === void 0) return void 0;
   if (top !== null) {
@@ -42497,11 +42917,11 @@ function skillInstalled(configDir, name) {
       for (const d of dirs) {
         const names = entries(d);
         if (names === void 0) return void 0;
-        next.push(...(names ?? []).map((n4) => join30(d, n4)));
+        next.push(...(names ?? []).map((n4) => join32(d, n4)));
       }
       dirs = next;
     }
-    if (dirs.some((d) => existsSync8(join30(d, "skills", name, "SKILL.md")))) return true;
+    if (dirs.some((d) => existsSync8(join32(d, "skills", name, "SKILL.md")))) return true;
   }
   return false;
 }
@@ -42518,7 +42938,7 @@ function planRea(o2) {
       "the owner config has no research_roots; add the directory that holds the analysis directory (studio.yaml cannot grant itself access)"
     );
   }
-  const home = o2.owner.homedir ?? homedir6();
+  const home = o2.owner.homedir ?? homedir7();
   const env = o2.owner.env ?? process.env;
   const platform2 = o2.owner.platform ?? process.platform;
   let real;
@@ -42534,7 +42954,7 @@ function planRea(o2) {
   } catch (e) {
     return fail4(e.message.replace(/^crew_toolchain_paths: [^:]*: /, ""));
   }
-  if (!statSync4(real).isDirectory()) fail4("is not a directory");
+  if (!statSync5(real).isDirectory()) fail4("is not a directory");
   const below = roots.some((r) => {
     let root = r;
     try {
@@ -42645,11 +43065,11 @@ async function readPinnedRules(projectDir2, ports, pin) {
 }
 function writePinnedRules(stateRoot, id, rules) {
   assertItemId(id);
-  const dir = join30(stateRoot, "briefs", `${id}.rules`);
+  const dir = join32(stateRoot, "briefs", `${id}.rules`);
   removeStateEntry(stateRoot, dir);
   const paths = [];
   for (const f3 of rules.files) {
-    const file4 = join30(dir, f3.name);
+    const file4 = join32(dir, f3.name);
     writeStateFile(stateRoot, file4, f3.content);
     paths.push(file4);
   }
@@ -42668,7 +43088,7 @@ function writeBrief(stateRoot, item, config2, projectDir2, rules, caps = plainCa
   const accepting = caps.review?.acceptance;
   let findingFile;
   if (item.finding !== void 0) {
-    findingFile = join30(stateRoot, "briefs", `${item.id}.caps`, "acceptance-finding.txt");
+    findingFile = join32(stateRoot, "briefs", `${item.id}.caps`, "acceptance-finding.txt");
     writeStateFile(
       stateRoot,
       findingFile,
@@ -42855,7 +43275,7 @@ ${item.finding}
       ""
     ] : []
   ];
-  const file4 = join30(stateRoot, "briefs", `${id}.md`);
+  const file4 = join32(stateRoot, "briefs", `${id}.md`);
   writeStateFile(stateRoot, file4, lines2.join("\n"));
   return file4;
 }
@@ -42877,7 +43297,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
   assertItemId(item.id);
   const id = item.id;
   const guardBin = dirs.windows === true ? GUARD_BIN.replace(/\\/g, "/") : GUARD_BIN;
-  const realHome = launcher2.homedir ?? homedir6();
+  const realHome = launcher2.homedir ?? homedir7();
   const env = launcher2.env ?? process.env;
   const { all: credentialPaths, extra: extraSecret } = credentialLocations(realHome, env);
   const toolchain = canonicalToolchainPaths(dirs.toolchainPaths, {
@@ -42905,33 +43325,33 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
     dirs.tmpDir,
     dirs.homeDir,
     ...toolchain,
-    ...loginDir === void 0 ? [] : ["skills", "plugins/cache", "plugins/marketplaces"].map((p) => join30(loginDir, p)),
+    ...loginDir === void 0 ? [] : ["skills", "plugins/cache", "plugins/marketplaces"].map((p) => join32(loginDir, p)),
     // The crew's own brief, caps and rules: the guard lets them be read, and a sandboxed read
     // (a shell command, or a file tool under the sandbox) must reach them too, or the crew
     // starts without its task. Nothing else of the state root comes back.
     // The reference excerpt of a group's main project (src/group.ts) is beside them.
-    ...["md", "caps", "rules", "reference"].map((ext) => join30(stateRoot, "briefs", `${id}.${ext}`)),
+    ...["md", "caps", "rules", "reference"].map((ext) => join32(stateRoot, "briefs", `${id}.${ext}`)),
     // Places a worker's owner opened inside its denied Windows mounts, for reads only.
     ...dirs.deny?.allowRead ?? []
   ];
-  const ctxFile = join30(stateRoot, "guard", `${id}.json`);
+  const ctxFile = join32(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
     ctxFile,
-    ...STATE_PROTECTED_DIRS.map((d) => join30(stateRoot, d)),
-    ...STATE_FILES.map((f3) => join30(stateRoot, f3)),
+    ...STATE_PROTECTED_DIRS.map((d) => join32(stateRoot, d)),
+    ...STATE_FILES.map((f3) => join32(stateRoot, f3)),
     // Below the state base, so the sandbox already keeps crews out; this is the second net.
-    join30(stateBase, OWNER_DIR)
+    join32(stateBase, OWNER_DIR)
   ];
-  const configDir = loginDir ?? (env.CLAUDE_CONFIG_DIR || join30(realHome, ".claude"));
+  const configDir = loginDir ?? (env.CLAUDE_CONFIG_DIR || join32(realHome, ".claude"));
   const skillRoots = unique2([
-    join30(configDir, "skills"),
-    join30(configDir, "plugins", "cache"),
-    join30(configDir, "plugins", "marketplaces")
+    join32(configDir, "skills"),
+    join32(configDir, "plugins", "cache"),
+    join32(configDir, "plugins", "marketplaces")
   ]);
   const toolResultGlobs = unique2(
     (dirs.runConfigDir === void 0 ? [configDir, realOr2(configDir)] : [dirs.runConfigDir]).flatMap(
       (dir) => [clone2, realOr2(clone2)].map(
-        (c3) => `${join30(dir, "projects", c3.replace(/[^A-Za-z0-9]/g, "-"))}/*/tool-results/**`
+        (c3) => `${join32(dir, "projects", c3.replace(/[^A-Za-z0-9]/g, "-"))}/*/tool-results/**`
       )
     )
   );
@@ -42940,10 +43360,10 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
     `${p}/**`
   ]);
   const readRoots = [
-    join30(stateRoot, "briefs", `${id}.md`),
-    join30(stateRoot, "briefs", `${id}.caps`),
-    join30(stateRoot, "briefs", `${id}.rules`),
-    join30(stateRoot, "briefs", `${id}.reference`),
+    join32(stateRoot, "briefs", `${id}.md`),
+    join32(stateRoot, "briefs", `${id}.caps`),
+    join32(stateRoot, "briefs", `${id}.rules`),
+    join32(stateRoot, "briefs", `${id}.reference`),
     dirs.homeDir,
     dirs.tmpDir,
     ...skillRoots
@@ -43061,7 +43481,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
       }
     }
   };
-  const file4 = join30(stateRoot, "settings", `${id}.json`);
+  const file4 = join32(stateRoot, "settings", `${id}.json`);
   writeStateFile(stateRoot, file4, `${JSON.stringify(settings, null, 2)}
 `);
   return file4;
@@ -43229,7 +43649,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
       throw new Error(`${item.id}: a cache item is a research item of the primary repository`);
     }
   }
-  const home = launcher2.homedir ?? homedir6();
+  const home = launcher2.homedir ?? homedir7();
   const owner = {
     homedir: home,
     env: penv,
@@ -43267,12 +43687,12 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
     extraCredentialPaths: credentialLocations(home, penv).extra
   });
   for (const sub of ["clones", "homes", "tmp"]) {
-    assertStatePath(stateRoot, join30(stateRoot, sub, item.id));
+    assertStatePath(stateRoot, join32(stateRoot, sub, item.id));
   }
   const previous = await refuseIfRunning(stateRoot, item, ports);
   const limits = readLimits(ownerRoot);
   if (!limits.ok) {
-    throw new Error(`${join30(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
+    throw new Error(`${join32(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
   const usage = labelUsage({ ownerRoot, ownerConfig, ports });
@@ -43285,9 +43705,9 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   const label = picked.label;
   const oauthToken = picked.token;
   const providerConfigDir = picked.configDir;
-  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join30(home, ".claude"));
+  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join32(home, ".claude"));
   const billing = apiBillingProblem(
-    join30(claudeConfigDir, "settings.json"),
+    join32(claudeConfigDir, "settings.json"),
     ownerConfig.allowApiBilling
   );
   if (billing) throw new Error(billing);
@@ -43348,7 +43768,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   if (pinOff) throw new Error(pinOff);
   const undeniable = installedSkills(claudeConfigDir).invalid;
   if (undeniable.length > 0) throw new Error(undeniableLine(claudeConfigDir, undeniable));
-  const clonePath = join30(stateRoot, "clones", item.id);
+  const clonePath = join32(stateRoot, "clones", item.id);
   if (!isCache && (previous?.limit || previous?.block) && existsNoFollow2(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
     throw new Error(
       `the clone of ${item.id} left its branch after ${previous.limit ? "a usage limit" : "an account block"}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
@@ -43396,7 +43816,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
       }
     }
     const again = readLimits(ownerRoot);
-    if (!again.ok) throw new Error(`${join30(ownerRoot, "limits.json")} is unreadable; refusing`);
+    if (!again.ok) throw new Error(`${join32(ownerRoot, "limits.json")} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
     if (Object.hasOwn(parkedNow, label)) {
       throw new HeldError(allParkedLine(parkedNow[label]?.parkedUntil));
@@ -43418,11 +43838,11 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   );
   lock.heartbeat(ports.clock.now());
   removeOldReport(stateRoot, wt.path, item.id);
-  const homeDir = join30(stateRoot, "homes", item.id);
+  const homeDir = join32(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
   writeHomeFile(homeDir, ".gitconfig", GITCONFIG);
-  const tmpDir = join30(stateRoot, "tmp", item.id);
+  const tmpDir = join32(stateRoot, "tmp", item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const cow = ports.cow ?? systemCowCopy(launcher2.platform ?? process.platform);
@@ -43456,7 +43876,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
   const briefReference = reference === void 0 ? void 0 : writeReference(stateRoot, item.id, reference, readContractChange(stateRoot, item));
   if (reference === void 0)
-    removeStateEntry(stateRoot, join30(stateRoot, "briefs", `${item.id}.reference`));
+    removeStateEntry(stateRoot, join32(stateRoot, "briefs", `${item.id}.reference`));
   const installedNames = new Set(installedSkills(claudeConfigDir).names);
   const caps = writeCaps({
     stateRoot,
@@ -43471,7 +43891,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   caps.reportName = newReportName(stateRoot, item.id);
   let timeouts;
   if (item.type === "review" && caps.review !== void 0) {
-    const agentsFile = join30(stateRoot, "guard", `${item.id}.agents.json`);
+    const agentsFile = join32(stateRoot, "guard", `${item.id}.agents.json`);
     removeStateEntry(stateRoot, agentsFile);
     removeStateEntry(stateRoot, timeoutsFileOf(agentsFile));
     const analyzerMinutes = config2.review?.analyzerTimeoutMinutes ?? DEFAULT_ANALYZER_TIMEOUT_MINUTES;
@@ -43479,7 +43899,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
       analyzerMinutes,
       analyzers: caps.review.analyzers.length,
       now: ports.clock.now(),
-      reportFile: join30(wt.path, ".studio", "reports", caps.reportName),
+      reportFile: join32(wt.path, ".studio", "reports", caps.reportName),
       agentsFile
     });
     caps.timeouts = { analyzerMinutes, sessionEndsAt: timeouts.sessionEndsAt };
@@ -43530,18 +43950,18 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
       },
       ...worker === void 0 ? {} : { deny: worker.deny },
       ...timeouts === void 0 ? {} : { timeouts },
-      ...windows === void 0 ? {} : { windows: true, runConfigDir: join30(homeDir, ".claude-run") },
+      ...windows === void 0 ? {} : { windows: true, runConfigDir: join32(homeDir, ".claude-run") },
       ...isCache ? {
         only: {
           commands: cacheCommands,
-          writes: [join30(wt.path, ".studio", "reports", caps.reportName)],
+          writes: [join32(wt.path, ".studio", "reports", caps.reportName)],
           commandMs: (config2.cache?.timeoutMin ?? 60) * 6e4
         }
       } : {}
     },
     owner
   );
-  const mcpConfig = join30(stateRoot, "settings", `${item.id}.mcp.json`);
+  const mcpConfig = join32(stateRoot, "settings", `${item.id}.mcp.json`);
   let reaServer;
   if (rea !== void 0) {
     const run2 = prepareReaRun(stateRoot, item.id);
@@ -43562,7 +43982,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
     })}
 `
   );
-  const settingsEnv = JSON.parse(readFileSync28(settings, "utf8")).env;
+  const settingsEnv = JSON.parse(readFileSync29(settings, "utf8")).env;
   const env = {};
   for (const k of BASE_ENV) {
     const v = penv[k];
@@ -43570,9 +43990,9 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   }
   env.HOME = homeDir;
   env.TMPDIR = tmpDir;
-  env.CARGO_HOME = join30(homeDir, ".cargo");
+  env.CARGO_HOME = join32(homeDir, ".cargo");
   const rustupHome = toolchainPaths.find(
-    (p) => existsSync8(join30(p, "settings.toml")) && existsSync8(join30(p, "toolchains"))
+    (p) => existsSync8(join32(p, "settings.toml")) && existsSync8(join32(p, "toolchains"))
   );
   if (rustupHome !== void 0) env.RUSTUP_HOME = rustupHome;
   env.CLAUDE_CONFIG_DIR = claudeConfigDir;
@@ -43586,7 +44006,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   Object.assign(env, settingsEnv);
   if (config2.cache?.enabled === true && worker === void 0) Object.assign(env, cacheEnv(homeDir));
   if (token && item.type !== "research") env.GH_TOKEN = token;
-  const log2 = join30(stateRoot, "logs", `${item.id}.jsonl`);
+  const log2 = join32(stateRoot, "logs", `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname11(log2));
   const logStart = fileSize(log2);
   if (windows !== void 0) {
@@ -43596,7 +44016,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
     );
     env.CLAUDE_CONFIG_DIR = runConfigDir(homeDir, claudeConfigDir);
     if (!existsNoFollow2(log2)) writeStateFile(stateRoot, log2, "");
-    const briefs = ["md", "caps", "rules", "reference"].map((ext) => join30(stateRoot, "briefs", `${item.id}.${ext}`)).filter(existsNoFollow2);
+    const briefs = ["md", "caps", "rules", "reference"].map((ext) => join32(stateRoot, "briefs", `${item.id}.${ext}`)).filter(existsNoFollow2);
     await windows.grant([
       { path: wt.path, rights: "M" },
       { path: homeDir, rights: "M" },
@@ -43604,7 +44024,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
       ...briefs.map((path10) => ({ path: path10, rights: "R" })),
       { path: settings, rights: "R" },
       { path: mcpConfig, rights: "R" },
-      { path: join30(stateRoot, "guard", `${item.id}.json`), rights: "R" },
+      { path: join32(stateRoot, "guard", `${item.id}.json`), rights: "R" },
       { path: log2, rights: "M" }
     ]);
   }
@@ -43658,7 +44078,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
     env
   );
   const name = crewName(item);
-  const crewFile = join30(stateRoot, "crew.json");
+  const crewFile = join32(stateRoot, "crew.json");
   const record2 = {
     name,
     item: item.id,
@@ -43733,7 +44153,7 @@ var MAX_PACKED_BYTES = 1024 * 1024;
 var TERMINAL2 = /* @__PURE__ */ new Set(["merged", "dropped"]);
 function lstatOr(p) {
   try {
-    return lstatSync25(p);
+    return lstatSync26(p);
   } catch {
     return void 0;
   }
@@ -43758,7 +44178,7 @@ function diskBytes2(path10, seen = /* @__PURE__ */ new Set()) {
     if (seen.has(key)) continue;
     seen.add(key);
     total += st.blocks !== void 0 ? st.blocks * 512 : st.size;
-    if (st.isDirectory()) for (const name of listDir(p)) stack.push(join31(p, name));
+    if (st.isDirectory()) for (const name of listDir(p)) stack.push(join33(p, name));
   }
   return total;
 }
@@ -43766,32 +44186,32 @@ function smallFile(p, max) {
   const st = lstatOr(p);
   if (st === void 0 || !st.isFile() || st.size > max) return void 0;
   try {
-    return readFileSync29(p, "utf8");
+    return readFileSync30(p, "utf8");
   } catch {
     return void 0;
   }
 }
 function localTips(clone2) {
-  const git2 = join31(clone2, ".git");
+  const git2 = join33(clone2, ".git");
   const tips = /* @__PURE__ */ new Set();
-  const head = smallFile(join31(git2, "HEAD"), MAX_REF_BYTES);
+  const head = smallFile(join33(git2, "HEAD"), MAX_REF_BYTES);
   if (head === void 0) return { ok: false, why: ".git/HEAD cannot be read as a plain file" };
   const h2 = head.trim();
   if (SHA.test(h2)) tips.add(h2);
   else if (!/^ref: refs\/heads\/\S+$/.test(h2)) return { ok: false, why: ".git/HEAD is unusual" };
-  if (lstatOr(join31(git2, "refs", "stash")) !== void 0)
+  if (lstatOr(join33(git2, "refs", "stash")) !== void 0)
     return { ok: false, why: "it has a stash" };
-  const refsSt = lstatOr(join31(git2, "refs"));
+  const refsSt = lstatOr(join33(git2, "refs"));
   if (refsSt !== void 0 && !refsSt.isDirectory())
     return { ok: false, why: ".git/refs is no folder" };
-  const stack = [join31(git2, "refs", "heads")];
+  const stack = [join33(git2, "refs", "heads")];
   while (stack.length > 0) {
     const dir = stack.pop();
     const st = lstatOr(dir);
     if (st === void 0) continue;
     if (!st.isDirectory()) return { ok: false, why: "a branch ref is no plain file" };
     for (const name of listDir(dir)) {
-      const p = join31(dir, name);
+      const p = join33(dir, name);
       const s = lstatOr(p);
       if (s?.isDirectory()) {
         stack.push(p);
@@ -43804,7 +44224,7 @@ function localTips(clone2) {
       tips.add(text2);
     }
   }
-  const packedPath = join31(git2, "packed-refs");
+  const packedPath = join33(git2, "packed-refs");
   if (lstatOr(packedPath) !== void 0) {
     const packed = smallFile(packedPath, MAX_PACKED_BYTES);
     if (packed === void 0) return { ok: false, why: ".git/packed-refs cannot be read" };
@@ -43825,7 +44245,7 @@ function localTips(clone2) {
 function onlyReports(clone2) {
   const top = listDir(clone2);
   if (top.length !== 1 || top[0] !== ".studio") return false;
-  const inner = listDir(join31(clone2, ".studio"));
+  const inner = listDir(join33(clone2, ".studio"));
   return inner.length === 1 && inner[0] === "reports";
 }
 function droppedAt(item) {
@@ -43869,19 +44289,19 @@ async function prHead(ports, repo, pr) {
 }
 async function planCloneGc(o2) {
   const ids = /* @__PURE__ */ new Set();
-  for (const sub of ITEM_DIRS) for (const name of listDir(join31(o2.stateRoot, sub))) ids.add(name);
+  for (const sub of ITEM_DIRS) for (const name of listDir(join33(o2.stateRoot, sub))) ids.add(name);
   const sorted = [...ids].sort();
   const sized = (id, e) => {
-    const clone2 = join31(o2.stateRoot, "clones", id);
+    const clone2 = join33(o2.stateRoot, "clones", id);
     const entry = { item: id, clone: lstatOr(clone2) !== void 0, ...e };
     if (!o2.sizes) return entry;
     const seen = /* @__PURE__ */ new Set();
     const parts = {};
     for (const part of SIZE_PARTS) {
-      if (lstatOr(join31(clone2, part))?.isDirectory())
-        parts[part] = diskBytes2(join31(clone2, part), new Set(seen));
+      if (lstatOr(join33(clone2, part))?.isDirectory())
+        parts[part] = diskBytes2(join33(clone2, part), new Set(seen));
     }
-    entry.bytes = ITEM_DIRS.reduce((n4, sub) => n4 + diskBytes2(join31(o2.stateRoot, sub, id), seen), 0);
+    entry.bytes = ITEM_DIRS.reduce((n4, sub) => n4 + diskBytes2(join33(o2.stateRoot, sub, id), seen), 0);
     if (Object.keys(parts).length > 0) entry.parts = parts;
     return entry;
   };
@@ -43935,12 +44355,12 @@ async function planCloneGc(o2) {
     } catch {
       return keep("the item names no valid repository");
     }
-    const clone2 = join31(o2.stateRoot, "clones", id);
+    const clone2 = join33(o2.stateRoot, "clones", id);
     const cloneSt = lstatOr(clone2);
     let tips = [];
     if (cloneSt !== void 0) {
       if (!cloneSt.isDirectory()) return keep("the clone is no plain folder");
-      const gitSt = lstatOr(join31(clone2, ".git"));
+      const gitSt = lstatOr(join33(clone2, ".git"));
       if (gitSt !== void 0) {
         if (!gitSt.isDirectory()) return keep(".git is no plain folder");
         const t = localTips(clone2);
@@ -43949,7 +44369,7 @@ async function planCloneGc(o2) {
       }
     }
     if (lessons === void 0 && cloneSt !== void 0) return keep("lessons.json cannot be read");
-    const hasReports = lstatOr(join31(clone2, ".studio", "reports"))?.isDirectory() === true;
+    const hasReports = lstatOr(join33(clone2, ".studio", "reports"))?.isDirectory() === true;
     const cited = hasReports ? citingLessons(lessons ?? [], id) : [];
     if (cited.length > 0 && onlyReports(clone2)) {
       return keep(`only its report is left, cited by lesson ${cited.join(", ")}`);
@@ -44004,11 +44424,11 @@ async function applyCloneGc(o2) {
         continue;
       }
       try {
-        const clone2 = join31(o2.stateRoot, "clones", e.item);
+        const clone2 = join33(o2.stateRoot, "clones", e.item);
         if (e.verdict === "trim") trimToReports(o2.stateRoot, clone2);
         else removeStateEntry(o2.stateRoot, clone2);
-        removeStateEntry(o2.stateRoot, join31(o2.stateRoot, "homes", e.item));
-        removeStateEntry(o2.stateRoot, join31(o2.stateRoot, "tmp", e.item));
+        removeStateEntry(o2.stateRoot, join33(o2.stateRoot, "homes", e.item));
+        removeStateEntry(o2.stateRoot, join33(o2.stateRoot, "tmp", e.item));
         (e.verdict === "trim" ? out.trimmed : out.removed).push(e.item);
       } catch (err) {
         out.skipped.push({
@@ -44024,15 +44444,15 @@ async function applyCloneGc(o2) {
 }
 function trimToReports(stateRoot, clone2) {
   for (const name of listDir(clone2)) {
-    if (name !== ".studio") removeStateEntry(stateRoot, join31(clone2, name));
+    if (name !== ".studio") removeStateEntry(stateRoot, join33(clone2, name));
   }
-  const studio = join31(clone2, ".studio");
+  const studio = join33(clone2, ".studio");
   if (lstatOr(studio)?.isDirectory() !== true) {
     removeStateEntry(stateRoot, studio);
     return;
   }
   for (const name of listDir(studio)) {
-    if (name !== "reports") removeStateEntry(stateRoot, join31(studio, name));
+    if (name !== "reports") removeStateEntry(stateRoot, join33(studio, name));
   }
 }
 function formatBytes(n4) {
@@ -44122,8 +44542,8 @@ function gcLines(r) {
 }
 
 // src/migration-numbers.ts
-import { existsSync as existsSync9, lstatSync as lstatSync26, readFileSync as readFileSync30 } from "node:fs";
-import { join as join32 } from "node:path";
+import { existsSync as existsSync9, lstatSync as lstatSync27, readFileSync as readFileSync31 } from "node:fs";
+import { join as join34 } from "node:path";
 var REGISTER_FILE = "migration-numbers.json";
 var REGISTER_LOCK = "migration-numbers.lock";
 var LOCK_STALE_MS4 = 3e4;
@@ -44156,17 +44576,17 @@ function migrationScheme(config2) {
   if (m === void 0) return void 0;
   return { repo: m.repo ?? config2.primaryRepo, dir: m.dir, pattern: new RegExp(m.numberPattern) };
 }
-var registerFile = (root) => join32(root, REGISTER_FILE);
+var registerFile = (root) => join34(root, REGISTER_FILE);
 function readRegister(root) {
   const file4 = registerFile(root);
   assertStatePath(root, file4);
   if (!existsSync9(file4)) return { v: 1, reservations: [] };
-  if (lstatSync26(file4).isSymbolicLink()) {
+  if (lstatSync27(file4).isSymbolicLink()) {
     throw new Error(`refusing to read ${file4}: it is a symlink`);
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync30(file4, "utf8"));
+    raw = JSON.parse(readFileSync31(file4, "utf8"));
   } catch {
     throw new Error(`migration register ${file4} is not valid JSON`);
   }
@@ -44524,47 +44944,13 @@ function registerDoctorLine(config2, root) {
 // src/push.ts
 import { randomBytes as randomBytes11 } from "node:crypto";
 import { lstatSync as lstatSync32, readFileSync as readFileSync37 } from "node:fs";
-import { join as join39 } from "node:path";
-
-// src/claude-language.ts
-import { lstatSync as lstatSync27, readFileSync as readFileSync31 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
-import { isAbsolute as isAbsolute9, join as join33 } from "node:path";
-var MAX_BYTES = 1024 * 1024;
-function languageIn2(file4) {
-  try {
-    const st = lstatSync27(file4);
-    if (!st.isFile() || st.size > MAX_BYTES) return void 0;
-    const raw = JSON.parse(readFileSync31(file4, "utf8"));
-    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
-    const language = raw.language;
-    return typeof language === "string" && language.trim() !== "" ? language : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function claudeLanguage(owner = {}, projectDir2) {
-  const env = owner.env ?? process.env;
-  const configDir = env.CLAUDE_CONFIG_DIR !== void 0 && isAbsolute9(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : join33(owner.homedir ?? homedir7(), ".claude");
-  const files = [
-    ...projectDir2 === void 0 ? [] : [
-      join33(projectDir2, ".claude", "settings.local.json"),
-      join33(projectDir2, ".claude", "settings.json")
-    ],
-    join33(configDir, "settings.json")
-  ];
-  for (const file4 of files) {
-    const language = languageIn2(file4);
-    if (language !== void 0) return language;
-  }
-  return void 0;
-}
+import { join as join40 } from "node:path";
 
 // src/evidence.ts
 var import_yaml12 = __toESM(require_dist(), 1);
 import { createHash as createHash5, randomBytes as randomBytes10 } from "node:crypto";
 import { existsSync as existsSync12, lstatSync as lstatSync30, mkdirSync as mkdirSync10, readFileSync as readFileSync35, writeFileSync as writeFileSync13 } from "node:fs";
-import { join as join37 } from "node:path";
+import { join as join38 } from "node:path";
 
 // src/ci-jobs.ts
 var import_yaml11 = __toESM(require_dist(), 1);
@@ -44813,17 +45199,17 @@ function approvedJobsProblem(jobs, checks) {
 import { spawn as spawn2, spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync10, lstatSync as lstatSync28, mkdirSync as mkdirSync8, mkdtempSync, readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { homedir as homedir8, tmpdir } from "node:os";
-import { basename as basename5, dirname as dirname12, join as join34, resolve as resolve8, sep as sep7 } from "node:path";
+import { basename as basename5, dirname as dirname12, join as join35, resolve as resolve9, sep as sep7 } from "node:path";
 var SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 var BWRAP = ["/usr/bin/bwrap", "/usr/local/bin/bwrap", "/bin/bwrap"];
 var KILL_GRACE_MS = 2e3;
 var LIMITS_REFUSED = 125;
 var within2 = (child, parent) => child === parent || child.startsWith(parent.endsWith(sep7) ? parent : parent + sep7);
 function realOr3(p) {
-  const abs = resolve8(p);
+  const abs = resolve9(p);
   if (existsSync10(abs)) return realpathSync9(abs);
   const parent = dirname12(abs);
-  return parent === abs ? abs : join34(realOr3(parent), basename5(abs));
+  return parent === abs ? abs : join35(realOr3(parent), basename5(abs));
 }
 var ancestors = (p) => {
   const out = [];
@@ -44909,8 +45295,8 @@ function bwrapArgs(plan, probe = probeDir, link2 = readlinkSync) {
   if ([plan.run, plan.tmp, plan.cwd, ...plan.read].some((p) => !p.startsWith("/"))) {
     return void 0;
   }
-  const run2 = resolve8(plan.run);
-  const tmp = resolve8(plan.tmp);
+  const run2 = resolve9(plan.run);
+  const tmp = resolve9(plan.tmp);
   if (!within2(tmp, run2)) return void 0;
   const system = LINUX_SYSTEM.flatMap((d) => {
     const kind = probe(d);
@@ -44930,7 +45316,7 @@ function bwrapArgs(plan, probe = probeDir, link2 = readlinkSync) {
     "/dev",
     "--tmpfs",
     "/tmp",
-    ...plan.read.flatMap((r) => ["--ro-bind", resolve8(r), resolve8(r)]),
+    ...plan.read.flatMap((r) => ["--ro-bind", resolve9(r), resolve9(r)]),
     "--ro-bind",
     run2,
     run2,
@@ -44938,7 +45324,7 @@ function bwrapArgs(plan, probe = probeDir, link2 = readlinkSync) {
     tmp,
     tmp,
     "--chdir",
-    resolve8(plan.cwd),
+    resolve9(plan.cwd),
     "--"
   ];
 }
@@ -44973,7 +45359,7 @@ var SYSTEM_PATH = [
 ];
 var PROOF_VAR = /^STUDIO_PROOF_[A-Z_]+$/;
 function proofEnv(read3, tmp, vars) {
-  const path10 = [...read3.flatMap((d) => [join34(d, "bin"), d]), ...SYSTEM_PATH];
+  const path10 = [...read3.flatMap((d) => [join35(d, "bin"), d]), ...SYSTEM_PATH];
   const env = {
     PATH: [...new Set(path10)].join(":"),
     HOME: tmp,
@@ -44991,8 +45377,8 @@ function proofEnv(read3, tmp, vars) {
 function makeRunDir(home = homedir8()) {
   let base2 = realOr3(tmpdir());
   if (within2(base2, realOr3(home))) base2 = realOr3("/tmp");
-  const run2 = realpathSync9(mkdtempSync(join34(base2, "studio-proof-")));
-  const tmp = join34(run2, "tmp");
+  const run2 = realpathSync9(mkdtempSync(join35(base2, "studio-proof-")));
+  const tmp = join35(run2, "tmp");
   mkdirSync8(tmp, { mode: 448 });
   return { run: run2, tmp };
 }
@@ -45143,7 +45529,7 @@ var realProofRunner = {
 
 // src/proof-tree.ts
 import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync12 } from "node:fs";
-import { dirname as dirname13, join as join35 } from "node:path";
+import { dirname as dirname13, join as join36 } from "node:path";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
 function isPlainObject3(value2) {
@@ -47635,7 +48021,7 @@ var escapeArgument = (rawArgument) => {
 var shouldQuoteArgument = (argument) => argument === "" || argument.endsWith("\\") || quotedCharacterRegExp.test(argument);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/cwd.js
-import { statSync as statSync5 } from "node:fs";
+import { statSync as statSync6 } from "node:fs";
 import path6 from "node:path";
 import process8 from "node:process";
 var normalizeCwd = (cwd = getDefaultCwd()) => {
@@ -47663,7 +48049,7 @@ var fixCwdError = (originalMessage, cwd) => {
   }
   let cwdStat;
   try {
-    cwdStat = statSync5(cwd);
+    cwdStat = statSync6(cwd);
   } catch (error62) {
     return `The "cwd" option is invalid: ${cwd}.
 ${error62.message}
@@ -52999,7 +53385,7 @@ async function writeTree(gitDir, entries2, dest, timeoutMs) {
     if (body.length !== e.size || out[nl + 1 + e.size] !== 10) {
       throw new Error("git cat-file ended early");
     }
-    const file4 = join35(dest, e.path);
+    const file4 = join36(dest, e.path);
     mkdirSync9(dirname13(file4), { recursive: true });
     writeFileSync12(file4, body, { flag: "wx", mode: e.mode === "100755" ? 493 : 420 });
     at2 = nl + 2 + e.size;
@@ -53017,7 +53403,7 @@ import {
   writeSync as writeSync2
 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { dirname as dirname14, join as join36 } from "node:path";
+import { dirname as dirname14, join as join37 } from "node:path";
 
 // src/main-build.ts
 var UNKNOWN = { status: "unknown" };
@@ -53155,7 +53541,7 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join36(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join37(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file4 = queueFile(stateRoot);
   assertStatePath(stateRoot, file4);
@@ -53251,7 +53637,7 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line4) {
-  const file4 = join36(stateRoot, name);
+  const file4 = join37(stateRoot, name);
   assertStatePath(stateRoot, file4);
   let torn = false;
   if (existsSync11(file4)) {
@@ -53850,7 +54236,7 @@ function proofCommandsFor(o2) {
     o2.homedir,
     stateBaseFor(owner),
     ownerConfigDir(owner),
-    o2.env.CLAUDE_CONFIG_DIR || join37(o2.homedir, ".claude"),
+    o2.env.CLAUDE_CONFIG_DIR || join38(o2.homedir, ".claude"),
     ...credentialLocations(o2.homedir, o2.env).all
   ];
   const runner = o2.runner ?? realProofRunner;
@@ -53878,7 +54264,7 @@ var short = (sha) => sha.slice(0, 12);
 var guardName = (r) => `${r.guard.workflow} / ${r.guard.job}`;
 var sameKey = (e, k) => e.rule === k.rule && e.repo === k.repo && e.pr === k.pr && e.base.toLowerCase() === k.base.toLowerCase() && e.head.toLowerCase() === k.head.toLowerCase();
 function readExceptions(stateRoot) {
-  const file4 = join37(stateRoot, EXCEPTIONS_FILE);
+  const file4 = join38(stateRoot, EXCEPTIONS_FILE);
   if (!existsSync12(file4)) return [];
   if (lstatSync30(file4).isSymbolicLink()) {
     throw new Error(`refusing to read ${file4}: it is a symlink`);
@@ -53925,7 +54311,7 @@ function recordException(stateRoot, entry) {
   }
 }
 function retryAllowed(stateRoot, key, now) {
-  const file4 = join37(stateRoot, RETRIES_FILE);
+  const file4 = join38(stateRoot, RETRIES_FILE);
   let counts = {};
   try {
     if (existsSync12(file4) && !lstatSync30(file4).isSymbolicLink()) {
@@ -54188,8 +54574,8 @@ async function runCommand(ctx, p, r, ref) {
     return { kind: "retry", why: "the proof run dir cannot be made" };
   }
   try {
-    const base2 = join37(dirs.run, "base");
-    const head = join37(dirs.run, "head");
+    const base2 = join38(dirs.run, "base");
+    const head = join38(dirs.run, "head");
     const listed = [];
     for (const [side, oid, dir] of [
       ["base", p.base, base2],
@@ -54214,8 +54600,8 @@ async function runCommand(ctx, p, r, ref) {
     } catch {
       return { kind: "retry", why: "the base and head cannot be written out" };
     }
-    const diff = join37(dirs.run, "diff.patch");
-    const files = join37(dirs.run, "files");
+    const diff = join38(dirs.run, "diff.patch");
+    const files = join38(dirs.run, "files");
     writeFileSync13(diff, p.diff, { mode: 256 });
     writeFileSync13(files, p.files.map((f3) => `${f3}\0`).join(""), { mode: 256 });
     const nonce = randomBytes10(16).toString("hex");
@@ -54569,7 +54955,7 @@ async function remoteTip(ctx, branch) {
 
 // src/pane-data.ts
 import { lstatSync as lstatSync31, readFileSync as readFileSync36 } from "node:fs";
-import { join as join38 } from "node:path";
+import { join as join39 } from "node:path";
 var WORKER_WAIT = "worker: ";
 var PR_HELD = "pr held: ";
 var TICK_FILE = "tick.json";
@@ -54750,7 +55136,7 @@ var rows = (v) => Array.isArray(v) ? v.flatMap(
   (r) => r !== null && typeof r === "object" && typeof r.item === "string" && typeof r.reason === "string" ? [{ item: r.item, reason: r.reason }] : []
 ) : [];
 function readTickRecord(root) {
-  const file4 = join38(root, TICK_FILE);
+  const file4 = join39(root, TICK_FILE);
   try {
     assertStatePath(root, file4);
     const st = lstatSync31(file4, { throwIfNoEntry: false });
@@ -54765,7 +55151,7 @@ function readTickRecord(root) {
   }
 }
 function writeTickRecord(root, rec) {
-  writeStateFile(root, join38(root, TICK_FILE), `${JSON.stringify(rec, null, 2)}
+  writeStateFile(root, join39(root, TICK_FILE), `${JSON.stringify(rec, null, 2)}
 `);
 }
 function resolveZone(timezone) {
@@ -54855,7 +55241,7 @@ function decisionsOf(o2) {
     const key = `${o2.projectKey}:${item}:${kind}:${d.at}`;
     if (!out.some((x) => x.key === key)) out.push({ key, item, kind, urgent: false });
   }
-  const read3 = readBlocksFile(join39(o2.ownerRoot, "blocks.json"));
+  const read3 = readBlocksFile(join40(o2.ownerRoot, "blocks.json"));
   if (!read3.ok) {
     out.push({ key: "block::unreadable", item: "?", kind: "account_block", urgent: true });
   } else {
@@ -54937,7 +55323,7 @@ async function pushLocked(o2) {
   });
   if (!lock) return { sent: 0, deferred: "locked", errors: [] };
   try {
-    const file4 = join39(o2.ownerRoot, PUSHED_FILE);
+    const file4 = join40(o2.ownerRoot, PUSHED_FILE);
     const state = readPushed(file4);
     if (state === void 0) {
       return { sent: 0, errors: [`notify: ${PUSHED_FILE} is unreadable; nothing sent`] };
@@ -54996,7 +55382,7 @@ async function pushLocked(o2) {
 
 // src/secret-command.ts
 function readPrimaryRepo(project) {
-  const file4 = join40(project, ".studio", "studio.yaml");
+  const file4 = join41(project, ".studio", "studio.yaml");
   let raw;
   try {
     raw = (0, import_yaml13.parse)(readFileSync38(file4, "utf8"));
@@ -55054,7 +55440,7 @@ async function runSecretSet(o2) {
 }
 var API_KEY_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 async function crewConfigDir(command, owner, env, ports) {
-  const fallback = env.CLAUDE_CONFIG_DIR || join40(owner.homedir ?? homedir9(), ".claude");
+  const fallback = env.CLAUDE_CONFIG_DIR || join41(owner.homedir ?? homedir9(), ".claude");
   if (command === void 0) return fallback;
   try {
     const got = await runCredentialProvider(
@@ -55108,9 +55494,9 @@ function toolsOutside(env, home, toolchain) {
   const out = [];
   for (const tool of CREW_TOOLS) {
     for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-      const file4 = join40(dir, tool);
+      const file4 = join41(dir, tool);
       try {
-        if (!statSync6(file4).isFile()) continue;
+        if (!statSync7(file4).isFile()) continue;
       } catch {
         continue;
       }
@@ -55157,7 +55543,7 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
   } else {
     const missing = roots.filter((r) => {
       try {
-        return !statSync6(r).isDirectory();
+        return !statSync7(r).isDirectory();
       } catch {
         return true;
       }
@@ -55171,7 +55557,7 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
   else {
     try {
       const real = realpathSync10(config2.research.artifacts);
-      if (!statSync6(real).isDirectory()) artifacts = "refused: not a directory";
+      if (!statSync7(real).isDirectory()) artifacts = "refused: not a directory";
       else {
         const inside = roots.some((r) => {
           try {
@@ -55189,7 +55575,7 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
   let registered = "not registered";
   if (configDir !== void 0) {
     try {
-      const raw = JSON.parse(readFileSync38(join40(configDir, ".claude.json"), "utf8"));
+      const raw = JSON.parse(readFileSync38(join41(configDir, ".claude.json"), "utf8"));
       const args = raw.mcpServers?.[REA_SERVER]?.args;
       const at2 = Array.isArray(args) ? args.find((a2) => typeof a2 === "string" && a2.startsWith(`${REA_PACKAGE}@`)) : void 0;
       if (typeof at2 === "string") {
@@ -55446,7 +55832,7 @@ async function runDoctor(o2) {
 // src/stack.ts
 var import_yaml14 = __toESM(require_dist(), 1);
 import { lstatSync as lstatSync33, readdirSync as readdirSync13, readFileSync as readFileSync39 } from "node:fs";
-import { join as join41 } from "node:path";
+import { join as join42 } from "node:path";
 var MAX_FILE_BYTES2 = 1024 * 1024;
 var MAX_ENTRIES = 200;
 var MONOREPO_DIRS = ["apps", "packages", "services", "crates", "libs"];
@@ -55489,7 +55875,7 @@ function readSmall(path10, notes, name) {
 }
 var isFileEntry = (dir, name) => {
   try {
-    return lstatSync33(join41(dir, name)).isFile();
+    return lstatSync33(join42(dir, name)).isFile();
   } catch {
     return false;
   }
@@ -55523,7 +55909,7 @@ function scanDir(dir, label, found, notes) {
     return;
   }
   const file4 = (n4) => isFileEntry(dir, n4);
-  const read3 = (n4) => readSmall(join41(dir, n4), notes, label ? `${label}/${n4}` : n4);
+  const read3 = (n4) => readSmall(join42(dir, n4), notes, label ? `${label}/${n4}` : n4);
   const some = (re) => names.some((n4) => re.test(n4) && file4(n4));
   const pkg = names.includes("package.json") && file4("package.json") ? read3("package.json") : void 0;
   if (pkg !== void 0) {
@@ -55533,7 +55919,7 @@ function scanDir(dir, label, found, notes) {
   }
   if (some(/^next\.config\./)) found.add("nextjs");
   if (some(/^components\.json$/)) found.add("shadcn");
-  if (isRealDir2(join41(dir, "migrations"))) found.add("postgres");
+  if (isRealDir2(join42(dir, "migrations"))) found.add("postgres");
   if (some(/^(Podfile|Package\.swift)$/) || names.some((n4) => n4.endsWith(".xcodeproj"))) {
     found.add("ios");
   }
@@ -55541,7 +55927,7 @@ function scanDir(dir, label, found, notes) {
     if (/WinUI|WindowsAppSDK/i.test(read3(n4) ?? "")) found.add("winui");
   }
   if (some(/^Cargo\.toml$/)) found.add("rust");
-  if (isRealDir2(join41(dir, "src-tauri"))) {
+  if (isRealDir2(join42(dir, "src-tauri"))) {
     found.add("tauri");
     found.add("rust");
   }
@@ -55550,7 +55936,7 @@ function scanDir(dir, label, found, notes) {
   if (some(/^svelte\.config\./)) found.add("svelte");
   if (some(/^(astro\.config\..*|vite\.config\..*|index\.html)$/)) found.add("web");
   if (some(/^Dockerfile/) || some(/^(docker-)?compose.*\.ya?ml$/)) found.add("docker");
-  if (some(/^wp-config\.php$/) || isRealDir2(join41(dir, "wp-content"))) found.add("wordpress");
+  if (some(/^wp-config\.php$/) || isRealDir2(join42(dir, "wp-content"))) found.add("wordpress");
   if (some(/^style\.css$/) && /Theme Name:/.test(read3("style.css") ?? "")) found.add("wordpress");
   for (const n4 of names.filter((x) => x.endsWith(".php") && file4(x))) {
     if (/Plugin Name:/.test(read3(n4) ?? "")) found.add("wordpress");
@@ -55560,20 +55946,20 @@ function detectStacks(dir) {
   const found = /* @__PURE__ */ new Set();
   const notes = [];
   scanDir(dir, "", found, notes);
-  if (isRealDir2(join41(dir, ".github", "workflows"))) found.add("gha");
+  if (isRealDir2(join42(dir, ".github", "workflows"))) found.add("gha");
   for (const group of MONOREPO_DIRS) {
-    const base2 = join41(dir, group);
+    const base2 = join42(dir, group);
     if (!isRealDir2(base2)) continue;
     for (const name of readdirSync13(base2).slice(0, MAX_ENTRIES)) {
       if (name.startsWith(".") || name === "node_modules") continue;
-      if (isRealDir2(join41(base2, name))) scanDir(join41(base2, name), `${group}/${name}`, found, notes);
+      if (isRealDir2(join42(base2, name))) scanDir(join42(base2, name), `${group}/${name}`, found, notes);
     }
   }
   if (OTHER_WEB.some((s) => found.has(s))) found.delete("web");
   return { stacks: [...found].sort(), notes };
 }
 function runSetupStack(o2) {
-  const file4 = join41(o2.project, ".studio", "studio.yaml");
+  const file4 = join42(o2.project, ".studio", "studio.yaml");
   let text2;
   try {
     text2 = readFileSync39(file4, "utf8");
@@ -55688,11 +56074,11 @@ function componentId2(name, root, taken) {
 }
 function proposeComponents(project, repo) {
   const components = [];
-  const manifests = new Set(MANIFESTS.filter((m) => isRealFile2(join42(project, m))));
+  const manifests = new Set(MANIFESTS.filter((m) => isRealFile2(join43(project, m))));
   const notes = [];
   const taken = /* @__PURE__ */ new Set();
   for (const root of MONOREPO_DIRS) {
-    const base2 = join42(project, root);
+    const base2 = join43(project, root);
     if (!isRealDir3(base2)) continue;
     let names;
     try {
@@ -55702,8 +56088,8 @@ function proposeComponents(project, repo) {
       continue;
     }
     for (const name of names) {
-      if (name.startsWith(".") || name === "node_modules" || !isRealDir3(join42(base2, name))) continue;
-      const found = MANIFESTS.filter((m) => isRealFile2(join42(base2, name, m)));
+      if (name.startsWith(".") || name === "node_modules" || !isRealDir3(join43(base2, name))) continue;
+      const found = MANIFESTS.filter((m) => isRealFile2(join43(base2, name, m)));
       if (found.length === 0) continue;
       if (!PLAIN_NAME.test(name)) {
         notes.push(`${root}/${safe(name)}: name needs quoting in a glob, add it by hand`);
@@ -55718,7 +56104,7 @@ function proposeComponents(project, repo) {
       });
     }
   }
-  const tooling = TOOLING_DIRS.filter((d) => isRealDir3(join42(project, d)));
+  const tooling = TOOLING_DIRS.filter((d) => isRealDir3(join43(project, d)));
   if (components.length > 0 && tooling.length > 0) {
     components.push({
       id: componentId2("tooling", "tooling", taken),
@@ -55809,8 +56195,14 @@ async function prerequisites(o2) {
   const claudeMs = o2.timeouts?.claudeMs ?? CLAUDE_TIMEOUT_MS;
   const doctor = await doctorReport(o2);
   const r = doctor.report;
+  const kind = o2.platform === "darwin" ? "macos" : o2.platform === "win32" ? "windows" : o2.platform === void 0 || o2.platform === "linux" ? leadKind(detectPlatform()) : "other";
   checks.push(
-    doctor.gitOk ? { name: "git", status: "pass", detail: r.git } : { name: "git", status: "fail", detail: r.git, fix: "install git 2.38 or newer" }
+    doctor.gitOk ? { name: "git", status: "pass", detail: r.git } : {
+      name: "git",
+      status: "fail",
+      detail: r.git,
+      fix: `git 2.38 or newer: ${installCommand("git", kind)}`
+    }
   );
   checks.push(await ghCheck(o2.ports, ghMs));
   const env = { PATH: o2.env.PATH ?? "", HOME: o2.owner.homedir ?? "" };
@@ -55825,7 +56217,7 @@ async function prerequisites(o2) {
       name: "claude",
       status: "fail",
       detail: claude.why ?? "the claude CLI does not run",
-      fix: "install Claude Code (https://code.claude.com) so that claude is on PATH"
+      fix: `install Claude Code so that claude is on PATH: ${installCommand("claude", kind)}`
     }
   );
   const node2 = o2.nodeVersion ?? process.versions.node;
@@ -55835,7 +56227,7 @@ async function prerequisites(o2) {
       name: "node",
       status: "fail",
       detail: `${node2} (too old)`,
-      fix: `install Node.js ${MIN_NODE_MAJOR} or newer`
+      fix: `Node.js ${MIN_NODE_MAJOR} or newer: ${installCommand("node", kind)}`
     }
   );
   const platform2 = o2.platform ?? process.platform;
@@ -55844,7 +56236,7 @@ async function prerequisites(o2) {
       name: "sandbox",
       status: "fail",
       detail: `Claude Code's sandbox does not run on ${platform2}`,
-      fix: "run the control room on macOS, Linux or WSL2"
+      fix: leadMachineProblem(kind, o2.env)?.fix ?? "run the control room on macOS, Linux or WSL2"
     }
   );
   checks.push(
@@ -55883,7 +56275,7 @@ var BOARD_IGNORE_TEXT = `# Studio: the board is lead-machine state; studio roadm
 ${BOARD_IGNORE}
 `;
 function ignoreBoard(project) {
-  const file4 = join42(project, ".gitignore");
+  const file4 = join43(project, ".gitignore");
   let text2 = "";
   if (exists3(file4)) {
     const st = lstatSync34(file4);
@@ -55939,13 +56331,13 @@ function writeBoth(o2, dir, files) {
   }
 }
 async function runInit(o2) {
-  const dotStudio = join42(o2.project, ".studio");
+  const dotStudio = join43(o2.project, ".studio");
   if (exists3(dotStudio) && !isRealDir3(dotStudio)) {
     throw new Error(
       ".studio is not a directory (a link or a file): nothing written; remove it first"
     );
   }
-  const present2 = STUDIO_FILES.filter((f3) => exists3(join42(o2.project, f3)));
+  const present2 = STUDIO_FILES.filter((f3) => exists3(join43(o2.project, f3)));
   if (present2.length > 0) {
     throw new Error(
       `${present2.join(" and ")} already exists: Studio is set up here, nothing written; edit the file by hand, or use studio setup ci, studio setup stack and studio doctor`
@@ -56043,7 +56435,7 @@ ${body}`;
   const boardText = BOARD_TEXT(prefix, repo);
   if (primary !== void 0) {
     try {
-      const file4 = join42(dotStudio, "studio.yaml");
+      const file4 = join43(dotStudio, "studio.yaml");
       parseBoard(boardText, boardPath(o2.project), parseConfig(configText, file4));
       checks.push({ name: "proposal", status: "pass", detail: "both files load" });
     } catch (e) {
@@ -56063,7 +56455,7 @@ ${body}`;
       refused = `nothing written: fix ${failed2.map((c3) => c3.name).join(", ") || "the checks"} first`;
     } else {
       writeBoth(o2, dotStudio, [
-        [join42(dotStudio, "studio.yaml"), configText],
+        [join43(dotStudio, "studio.yaml"), configText],
         [boardPath(o2.project), boardText]
       ]);
       written.push(...STUDIO_FILES);
@@ -56132,14 +56524,14 @@ ${body}`;
 
 // src/lessons-review.ts
 import { lstatSync as lstatSync35, readFileSync as readFileSync41 } from "node:fs";
-import { join as join43 } from "node:path";
+import { join as join44 } from "node:path";
 var LESSONS_REVIEW_DAYS = 7;
 var DAY_MS4 = 864e5;
 var LESSONS_NOTE = "lessons-review: ";
 var NUMBERS_NOTE = "lessons: ";
 var LEAD_WORK = "lead work: studio lessons, then accept or drop each proposal";
 var BY = "studio";
-var recordFile = (stateRoot) => join43(stateRoot, "lessons-review.json");
+var recordFile = (stateRoot) => join44(stateRoot, "lessons-review.json");
 function lastRun(stateRoot) {
   const file4 = recordFile(stateRoot);
   try {
@@ -56776,7 +57168,7 @@ import {
   rmSync as rmSync9,
   writeFileSync as writeFileSync15
 } from "node:fs";
-import { dirname as dirname15, isAbsolute as isAbsolute10, join as join44, relative as relative2, resolve as resolve9, sep as sep8 } from "node:path";
+import { dirname as dirname15, isAbsolute as isAbsolute10, join as join45, relative as relative2, resolve as resolve10, sep as sep8 } from "node:path";
 
 // src/epics.ts
 var ONE_LINE2 = /^[^\p{Cc}\p{Cf}]{1,300}$/u;
@@ -57005,11 +57397,11 @@ function projectFile(project, file4) {
     throw new Error(`${JSON.stringify(file4)}: must stay inside the project`);
   }
   const root = realpathSync11(project);
-  const wanted = resolve9(root, file4);
+  const wanted = resolve10(root, file4);
   let dir = dirname15(wanted);
   while (!existsSync13(dir)) dir = dirname15(dir);
   const realDir = realpathSync11(dir);
-  const full = join44(realDir, relative2(dir, wanted));
+  const full = join45(realDir, relative2(dir, wanted));
   const rel = relative2(root, full);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep8}`) || isAbsolute10(rel)) {
     throw new Error(`${JSON.stringify(file4)}: must stay inside the project`);
@@ -57044,7 +57436,7 @@ function writeRoadmap(project, out, text2, force) {
     );
   }
   if (old === text2) return { written: out, changed: false };
-  const tmp = join44(dirname15(file4), `.${process.pid}.${Date.now()}.roadmap.tmp`);
+  const tmp = join45(dirname15(file4), `.${process.pid}.${Date.now()}.roadmap.tmp`);
   try {
     writeFileSync15(tmp, text2, { flag: "wx" });
     renameSync14(tmp, file4);
@@ -57444,7 +57836,7 @@ var runsSchema = external_exports.record(
   })
 );
 function readRuns(stateRoot) {
-  const file4 = join45(stateRoot, RUNS_FILE);
+  const file4 = join46(stateRoot, RUNS_FILE);
   try {
     assertStatePath(stateRoot, file4);
     const st = lstatSync37(file4, { throwIfNoEntry: false });
@@ -57456,7 +57848,7 @@ function readRuns(stateRoot) {
     return void 0;
   }
 }
-var writeRuns = (stateRoot, runs) => writeStateFile(stateRoot, join45(stateRoot, RUNS_FILE), `${JSON.stringify(runs, null, 2)}
+var writeRuns = (stateRoot, runs) => writeStateFile(stateRoot, join46(stateRoot, RUNS_FILE), `${JSON.stringify(runs, null, 2)}
 `);
 async function prepareAcceptances(o2) {
   const out = {
@@ -57959,19 +58351,19 @@ function applyAcceptance(board, acceptance, done, now, config2) {
 
 // src/adopt.ts
 import { lstatSync as lstatSync41, readdirSync as readdirSync16, readFileSync as readFileSync48, realpathSync as realpathSync12 } from "node:fs";
-import { join as join51, resolve as resolve10 } from "node:path";
+import { join as join52, resolve as resolve11 } from "node:path";
 
 // src/recover.ts
 import { existsSync as existsSync14, lstatSync as lstatSync40, readdirSync as readdirSync15 } from "node:fs";
-import { join as join50 } from "node:path";
+import { join as join51 } from "node:path";
 
 // src/flaky-ci.ts
 import { readFileSync as readFileSync45 } from "node:fs";
-import { join as join47 } from "node:path";
+import { join as join48 } from "node:path";
 
 // src/flaky.ts
 import { readFileSync as readFileSync44 } from "node:fs";
-import { join as join46 } from "node:path";
+import { join as join47 } from "node:path";
 var MAX_FLAKY = 500;
 var MAX_NAME2 = 200;
 var entrySchema3 = external_exports.object({
@@ -57980,7 +58372,7 @@ var entrySchema3 = external_exports.object({
   lastSha: external_exports.string(),
   lastAt: external_exports.string()
 });
-var fileOf = (stateRoot) => join46(stateRoot, "flaky.json");
+var fileOf = (stateRoot) => join47(stateRoot, "flaky.json");
 function read2(stateRoot) {
   const file4 = fileOf(stateRoot);
   assertStatePath(stateRoot, file4);
@@ -58043,7 +58435,7 @@ var entrySchema4 = external_exports.strictObject({
   outcome: external_exports.enum(["pass", "fail"]).optional()
 });
 function readLedger2(stateRoot) {
-  const file4 = join47(stateRoot, RERUNS_FILE);
+  const file4 = join48(stateRoot, RERUNS_FILE);
   assertStatePath(stateRoot, file4);
   let text2;
   try {
@@ -58064,7 +58456,7 @@ function readLedger2(stateRoot) {
 }
 function writeLedger(stateRoot, entries2, now) {
   const kept = entries2.filter((e) => now.getTime() - Date.parse(e.at) < KEEP_MS2).slice(-MAX_ENTRIES3);
-  writeStateFile(stateRoot, join47(stateRoot, RERUNS_FILE), `${JSON.stringify(kept, null, 2)}
+  writeStateFile(stateRoot, join48(stateRoot, RERUNS_FILE), `${JSON.stringify(kept, null, 2)}
 `);
 }
 function withLedger(stateRoot, now, fn) {
@@ -58305,7 +58697,7 @@ function ciFailurePolicy(o2) {
 // src/notify.ts
 import { lstatSync as lstatSync38, readFileSync as readFileSync46 } from "node:fs";
 import { homedir as homedir10 } from "node:os";
-import { join as join48 } from "node:path";
+import { join as join49 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
 var MAX_TEXT2 = 500;
 var NOTIFY_LOCK = "notify.lock";
@@ -58372,7 +58764,7 @@ async function sendNotifications(o2) {
   }
 }
 async function sendLocked(o2, notify, lock) {
-  const file4 = join48(o2.ownerRoot, "notified.json");
+  const file4 = join49(o2.ownerRoot, "notified.json");
   const read3 = readNotified(file4);
   if (!read3.ok) return ["notify: notified.json is unreadable; nothing sent"];
   try {
@@ -58442,7 +58834,7 @@ async function sendLocked(o2, notify, lock) {
 var import_yaml16 = __toESM(require_dist(), 1);
 import { createHash as createHash7 } from "node:crypto";
 import { lstatSync as lstatSync39, readFileSync as readFileSync47 } from "node:fs";
-import { join as join49 } from "node:path";
+import { join as join50 } from "node:path";
 
 // src/migrations.ts
 var MIGRATION_RISKS = ["lock", "fails_on_data"];
@@ -58958,7 +59350,7 @@ var short2 = (sha) => sha.slice(0, 7);
 var clean6 = (s, max) => s.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
 var quote = (p) => JSON.stringify(clean6(p, 300));
 function readReleases(stateRoot) {
-  const file4 = join49(stateRoot, RELEASES_FILE);
+  const file4 = join50(stateRoot, RELEASES_FILE);
   assertStatePath(stateRoot, file4);
   const st = lstatSync39(file4, { throwIfNoEntry: false });
   if (st === void 0) return [];
@@ -58978,7 +59370,7 @@ function readReleases(stateRoot) {
 function writeReleases(stateRoot, releases) {
   writeStateFile(
     stateRoot,
-    join49(stateRoot, RELEASES_FILE),
+    join50(stateRoot, RELEASES_FILE),
     `${JSON.stringify({ v: 1, releases }, null, 2)}
 `
   );
@@ -60305,7 +60697,7 @@ var LOG_QUIET_MS = 30 * 6e4;
 function logWrittenAgo(stateRoot, item, now) {
   if (!isItemId(item)) return void 0;
   try {
-    const st = lstatSync40(join50(stateRoot, "logs", `${item}.jsonl`));
+    const st = lstatSync40(join51(stateRoot, "logs", `${item}.jsonl`));
     return st.isFile() ? Math.max(0, now.getTime() - st.mtimeMs) : void 0;
   } catch {
     return void 0;
@@ -60314,7 +60706,7 @@ function logWrittenAgo(stateRoot, item, now) {
 function hasReport2(stateRoot, item) {
   if (!isItemId(item)) return false;
   const name = reportName(stateRoot, item);
-  return name !== void 0 && existsSync14(join50(stateRoot, "clones", item, ".studio", "reports", name));
+  return name !== void 0 && existsSync14(join51(stateRoot, "clones", item, ".studio", "reports", name));
 }
 async function recoverProject(o2) {
   const out = { dryRun: o2.dryRun, findings: [], needsLead: [] };
@@ -60358,7 +60750,7 @@ async function recoverProject(o2) {
         continue;
       }
       for (const name of names) {
-        const file4 = join50(root, name);
+        const file4 = join51(root, name);
         const tmp = TMP.exec(name);
         let gone = false;
         if (ASIDE.test(name)) {
@@ -60589,13 +60981,13 @@ function isDir3(p) {
   }
 }
 function markerOrigin(root) {
-  const text2 = plainFile(join51(root, "marker.json"));
+  const text2 = plainFile(join52(root, "marker.json"));
   if (text2 === void 0) throw new Error(`${root} has no marker.json: it is not a state root`);
   let m;
   try {
     m = JSON.parse(text2);
   } catch {
-    throw new Error(`${join51(root, "marker.json")} is unreadable`);
+    throw new Error(`${join52(root, "marker.json")} is unreadable`);
   }
   if (typeof m?.originUrl !== "string") throw new Error(`${root}/marker.json names no origin`);
   return m.originUrl;
@@ -60620,7 +61012,7 @@ async function busy(root, label, ports, now) {
       why.push(`${label}: ${what}`);
     }
   }
-  const q = plainFile(join51(root, QUEUE));
+  const q = plainFile(join52(root, QUEUE));
   if (q !== void 0) {
     try {
       const cur = JSON.parse(q).current;
@@ -60635,7 +61027,7 @@ async function busy(root, label, ports, now) {
 var lines = (text2) => text2.split("\n").filter((l) => l.trim() !== "");
 var doneKey = (d) => `${d.repo}#${d.pr}|${d.result}|${d.at}`;
 async function adoptStateRoot(o2) {
-  const from = resolve10(o2.from);
+  const from = resolve11(o2.from);
   if (!isDir3(from))
     throw new Error(`${from} is not a state root folder (missing, a link or a file)`);
   const realFrom = realpathSync12(from);
@@ -60659,9 +61051,9 @@ async function adoptStateRoot(o2) {
   const files = [];
   const writes = [];
   for (const f3 of ADOPT_FILES) {
-    const old = plainFile(join51(from, f3.name));
+    const old = plainFile(join52(from, f3.name));
     if (old === void 0) continue;
-    const cur = isDir3(o2.to) ? plainFile(join51(o2.to, f3.name)) : void 0;
+    const cur = isDir3(o2.to) ? plainFile(join52(o2.to, f3.name)) : void 0;
     if (cur === void 0) {
       files.push({ name: f3.name, action: "copy" });
       writes.push({ name: f3.name, content: old });
@@ -60686,13 +61078,13 @@ async function adoptStateRoot(o2) {
   }
   let queueDone = [];
   let pendingLeft = 0;
-  const oldQueue = plainFile(join51(from, QUEUE));
+  const oldQueue = plainFile(join52(from, QUEUE));
   if (oldQueue !== void 0) {
     const q = JSON.parse(oldQueue);
     pendingLeft = q.pending?.length ?? 0;
     queueDone = q.done ?? [];
     if (queueDone.length > 0) {
-      const curText = isDir3(o2.to) ? plainFile(join51(o2.to, QUEUE)) : void 0;
+      const curText = isDir3(o2.to) ? plainFile(join52(o2.to, QUEUE)) : void 0;
       const have = new Set(
         (curText === void 0 ? {} : JSON.parse(curText)).done?.map(doneKey) ?? []
       );
@@ -60715,7 +61107,7 @@ async function adoptStateRoot(o2) {
     if (lock === void 0)
       throw new Error("not now: a tick is running in this root; nothing changed");
     try {
-      for (const w of writes) writeStateFile(o2.to, join51(o2.to, w.name), w.content);
+      for (const w of writes) writeStateFile(o2.to, join52(o2.to, w.name), w.content);
       if (queueDone.length > 0) {
         updateQueue(
           o2.to,
@@ -60806,23 +61198,23 @@ var COMMANDS = [
     about: "On a relay worker: the runner a start hands its job to (Studio starts it, not you)"
   },
   {
-    usage: "relay pair <label> <host> [--port <n>] [--user <name>]",
+    usage: "relay pair <label> <host> [--port <n>] [--user <name>] [--dry-run]",
     about: "On the lead: make the lead's key for a relay worker and print the one pairing line"
   },
   {
-    usage: "relay pair <label> --connect",
+    usage: "relay pair <label> --connect [--dry-run]",
     about: "On the lead: pin the host key the worker proves with the pairing secret; write workers.relay.<label>"
   },
   {
-    usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--i-am-local] [--force-stop]",
+    usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--i-am-local] [--force-stop] [--dry-run]",
     about: "On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead"
   },
   {
-    usage: "relay uninstall [--keep-tree] [--force-stop] [--user <name>] [--home <dir>] [--i-am-local]",
+    usage: "relay uninstall [--keep-tree] [--force-stop] [--user <name>] [--home <dir>] [--i-am-local] [--dry-run]",
     about: "On a Windows worker, elevated: remove everything relay install made, every lead first; run again to finish"
   },
   {
-    usage: "relay unpair <label> [--home <dir>]",
+    usage: "relay unpair <label> [--home <dir>] [--dry-run]",
     about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key"
   },
   {
@@ -60936,7 +61328,7 @@ var COMMANDS = [
     about: "Pinned plugins against their marketplaces and sources against upstream; one board item per update. Monthly (tick runs it); --now runs it at once, --security marks an update as security-relevant (priority 0)"
   },
   {
-    usage: "setup [--link] [--notifications]",
+    usage: "setup [--link] [--notifications] [--dry-run]",
     about: "Owner only, in a terminal: gh, crew token, Claude account, studio on your terminal's PATH (--link), phone notifications and, optionally, REA for researcher crews; one guided step each, skipped when done; --notifications runs only that step again"
   },
   {
@@ -60965,7 +61357,7 @@ var COMMANDS = [
     about: "List the clones, crew homes and tmp dirs of finished items with their sizes and whether they can go; a dry run without --apply, which removes them (the tick does too)"
   },
   {
-    usage: "account add <label>",
+    usage: "account add <label> [--dry-run]",
     about: "Owner only, in a terminal: store a token from claude setup-token"
   },
   { usage: "account list", about: "Stored Claude accounts and their state, never a token" },
@@ -61039,11 +61431,11 @@ var USAGE = helpText();
 
 // src/overview.ts
 import { lstatSync as lstatSync42, readFileSync as readFileSync49 } from "node:fs";
-import { basename as basename6, isAbsolute as isAbsolute11, join as join52 } from "node:path";
+import { basename as basename6, isAbsolute as isAbsolute11, join as join53 } from "node:path";
 var line3 = (e) => (e instanceof Error ? e.message : String(e)).replace(/[\p{Cc}\p{Cf}]/gu, " ");
 var INCONSISTENT_ROOT = "inconsistent state root: its marker names a project whose state root is another one";
 function markerProject(root) {
-  const file4 = join52(root, "marker.json");
+  const file4 = join53(root, "marker.json");
   try {
     if (!lstatSync42(file4).isFile()) throw new Error(`${file4} is not a plain file`);
   } catch (e) {
@@ -61255,7 +61647,7 @@ function privacyLine(hits) {
 // src/pull-request.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync10, writeFileSync as writeFileSync16 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join53 } from "node:path";
+import { join as join54 } from "node:path";
 var PR_BODY_MAX = 2e4;
 function crewPrText(item, body, notRunHere) {
   return `Opened by Studio for ${item.id}; the text below the line was written by the crew.
@@ -61294,9 +61686,9 @@ async function openCrewPr(ports, item, title, body, notRunHere, token, capacity,
     throw new Error(`the pull request title for ${head} is empty; nothing moved`);
   const text2 = crewPrText(item, body, notRunHere);
   const withBody = async (use) => {
-    const dir = mkdtempSync2(join53(tmpdir2(), "studio-pr-"));
+    const dir = mkdtempSync2(join54(tmpdir2(), "studio-pr-"));
     try {
-      const file4 = join53(dir, "body.md");
+      const file4 = join54(dir, "body.md");
       writeFileSync16(file4, text2, { mode: 384 });
       return await use(file4);
     } finally {
@@ -61369,72 +61761,6 @@ import {
 } from "node:fs";
 import { homedir as homedir13, tmpdir as tmpdir4 } from "node:os";
 import { dirname as dirname19, join as join63, resolve as resolve14 } from "node:path";
-
-// src/lead-machine.ts
-import { statSync as statSync7 } from "node:fs";
-import { join as join54, resolve as resolve11 } from "node:path";
-function leadKind(p) {
-  if (p.platform === "darwin") return "macos";
-  if (p.platform === "win32") return "windows";
-  if (p.platform !== "linux") return "other";
-  if (p.wsl === "wsl2") return "wsl2";
-  if (p.wsl === "wsl1" || p.wsl === "unknown") return "wsl1";
-  return "linux";
-}
-function installCommand(tool, kind) {
-  const mac3 = kind === "macos";
-  switch (tool) {
-    case "git":
-      return mac3 ? "xcode-select --install" : "sudo apt-get install -y git";
-    case "gh":
-      return mac3 ? "brew install gh" : "sudo apt-get install -y gh";
-    case "node":
-      return mac3 ? "brew install node@24" : "curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs";
-    case "claude":
-      return "curl -fsSL https://claude.ai/install.sh | bash";
-    case "ssh":
-      return mac3 ? "ssh is part of macOS" : "sudo apt-get install -y openssh-client";
-    case "sandbox":
-      return mac3 ? "part of macOS" : "sudo apt-get install -y bubblewrap socat";
-  }
-}
-function leadMachineProblem(kind, env) {
-  if (kind === "windows") {
-    return {
-      why: "the lead does not run on native Windows (Claude Code has no sandbox there)",
-      fix: 'in PowerShell as administrator: wsl --install -d Ubuntu-24.04, restart the PC, open Ubuntu and run studio setup there (README, "Lead on a Windows PC (WSL2)")'
-    };
-  }
-  if (kind === "wsl1") {
-    const distro = env.WSL_DISTRO_NAME ?? "<distribution>";
-    return {
-      why: "this is WSL1 (or a WSL whose version cannot be told); the lead needs WSL2",
-      fix: `in PowerShell: wsl --set-version ${distro} 2, then open it again and run studio setup`
-    };
-  }
-  if (kind === "other")
-    return { why: "this platform is not supported", fix: "run the lead on macOS, Linux or WSL2" };
-  return void 0;
-}
-function onWindowsDrive(path10, p) {
-  if (p.platform !== "linux" || p.wsl === "none") return false;
-  const abs = `${resolve11(path10).replace(/\/+$/, "")}/`;
-  const roots = [p.automountRoot, ...p.windowsMounts ?? []].map(
-    (r) => `${r.replace(/\/+$/, "")}/`
-  );
-  return roots.some((r) => r !== "/" && abs.startsWith(r));
-}
-function onPath(name, env) {
-  for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-    const file4 = join54(dir, name);
-    try {
-      const st = statSync7(file4);
-      if (st.isFile() && (st.mode & 73) !== 0) return file4;
-    } catch {
-    }
-  }
-  return void 0;
-}
 
 // src/relay-lead.ts
 import { existsSync as existsSync15, lstatSync as lstatSync43, readFileSync as readFileSync50, writeFileSync as writeFileSync17 } from "node:fs";
@@ -66200,6 +66526,20 @@ async function syncAuthorizedKeys(o2) {
 }
 async function install(o2) {
   const exec = o2.exec ?? systemExec;
+  const t = setupText({ owner: o2.owner, env: o2.env });
+  const dry = o2.values["dry-run"] === true;
+  if (dry) {
+    if ((o2.platform ?? detectPlatform()).platform !== "win32") {
+      throw new Error(
+        "relay install sets up a Windows relay worker; elsewhere run studio relay serve --home <dir> as the forced command of your sshd"
+      );
+    }
+    o2.stdout(`${t.dryRun}
+`);
+    for (const line4 of installPlan(o2)) o2.stdout(`${t.would(line4)}
+`);
+    return 0;
+  }
   await windowsAdmin({ ...o2, what: "install" });
   if (o2.values["i-am-local"] !== true && (sshSessionVar(o2.env) || await underSshd(exec))) {
     throw new Error(
@@ -66231,9 +66571,8 @@ async function install(o2) {
     }
     scope = { tailscale: true };
   }
-  o2.stdout(
-    "Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.\n"
-  );
+  o2.stdout(`${t.installWebClient}
+`);
   const dir = mkdtempSync4(join63(tmpdir4(), "studio-relay-install-"));
   const file4 = join63(dir, "install.ps1");
   writeFileSync21(
@@ -66257,7 +66596,8 @@ async function install(o2) {
     rmSync13(dir, { recursive: true, force: true });
   }
   if (r.code !== 0) {
-    o2.stderr("studio: relay install stopped; fix what it says and run it again (it repairs)\n");
+    o2.stderr(`${t.installStopped}
+`);
     return 1;
   }
   const config2 = join63(machineConfig(o2.machine), "studio", "config.yaml");
@@ -66280,14 +66620,51 @@ async function install(o2) {
   if (!await syncAuthorizedKeys({ ...o2, exec })) return 1;
   const hostKey = (o2.hostKey ?? (() => readHostKey(o2.env, "win32")))();
   o2.stdout(
-    hostKey === void 0 ? "host key: cannot read the OpenSSH server host key\n" : `host key fingerprint: ${keyFingerprint(hostKey)}${o2.pair === void 0 ? "" : `
-On the lead, within the hour: studio relay pair ${o2.pair.label} --connect`}
-`
+    `${hostKey === void 0 ? t.hostKeyUnknown : t.hostKey(keyFingerprint(hostKey))}
+${o2.pair === void 0 ? "" : `${t.installNext(o2.pair.label)}
+`}`
   );
   return 0;
 }
+function installPlan(o2) {
+  const port = o2.values.port ?? "22";
+  const scope = o2.values.source !== void 0 ? `the source ${o2.values.source}` : o2.values.interface !== void 0 ? `the interface ${o2.values.interface}` : "the Tailscale interface (else it asks for --interface or --source)";
+  return [
+    "refuse in an SSH session and while a relay job runs (--force-stop ends it)",
+    "install Git and Claude Code with winget where missing, and the OpenSSH server; refuse Git older than 2.35.2",
+    "stop sshd and close it until everything checked out",
+    `create the relay account ${o2.relayUser} (standard user) and the group of the crew users`,
+    `make the admin-only tree ${o2.machine} (Node.js, Studio, config, broker) and the relay home ${o2.home}`,
+    o2.values["no-firewall"] === true ? "put NO network lockdown in place (--no-firewall, unsafe) and remove an earlier one" : "block the local network for the relay account and the crews in Windows Firewall and prove it with a throwaway user",
+    "let only administrators install printer drivers (Point and Print)",
+    `register the broker tasks; stop and disable WebClient${o2.values["disable-spooler"] === true ? " and the print spooler" : ""}`,
+    "install the pinned plugins for crews",
+    `write the sshd block (checked with sshd -t), start sshd on port ${port}, reachable only from ${scope}${o2.values["keep-passwords"] === true ? "" : "; keys only for every account"}`,
+    o2.pair === void 0 ? "authorize the leads of the recorded pairings only" : `record the pairing of ${o2.pair.label} and authorize its key`,
+    "print the host key fingerprint"
+  ];
+}
 async function uninstall(o2) {
   const exec = o2.exec ?? systemExec;
+  const t = setupText({ owner: o2.owner, env: o2.env });
+  if (o2.values["dry-run"] === true) {
+    o2.stdout(`${t.dryRun}
+`);
+    for (const line4 of [
+      "remove every lead key and pairing first",
+      "refuse while a relay job runs (--force-stop ends it)",
+      "remove the broker tasks and the sealed crew credential",
+      "retire the crew users, then remove their group with its firewall rule, logon rights and read grants",
+      `remove the relay account ${o2.relayUser ?? "studio-relay"} and its profile (only a user with Studio's description)`,
+      "remove Studio's lines in sshd_config, its firewall rules and the network lockdown",
+      o2.values["keep-tree"] === true ? `keep ${o2.machine} and the relay home (--keep-tree)` : `remove ${o2.machine} and the relay home`,
+      "turn services back on only as the install recorded them"
+    ]) {
+      o2.stdout(`${t.would(line4)}
+`);
+    }
+    return 0;
+  }
   await windowsAdmin({ ...o2, what: "uninstall" });
   if (o2.values["i-am-local"] !== true && (sshSessionVar(o2.env) || await underSshd(exec))) {
     throw new Error(
@@ -66321,11 +66698,8 @@ async function uninstall(o2) {
     record: record2,
     treeSource: TREE_SOURCE()
   });
-  if (record2 === void 0) {
-    o2.stdout(
-      "No install record here (an install of an earlier version): services Studio stopped stay as they are.\n"
-    );
-  }
+  if (record2 === void 0) o2.stdout(`${t.uninstallNoRecord}
+`);
   const dir = mkdtempSync4(join63(tmpdir4(), "studio-relay-uninstall-"));
   const file4 = join63(dir, "uninstall.ps1");
   writeFileSync21(file4, script);
@@ -66340,20 +66714,24 @@ async function uninstall(o2) {
     rmSync13(dir, { recursive: true, force: true });
   }
   if (r.code !== 0) {
-    o2.stderr(
-      "studio: relay uninstall stopped; fix what it says and run studio relay uninstall again (it goes on where it stopped)\n"
-    );
+    o2.stderr(`${t.uninstallStopped}
+`);
     return 1;
   }
-  o2.stdout(
-    leads.length === 0 ? "Done. Next: on the lead, remove this worker from workers.relay in the owner config.\n" : `Done. Next: on each lead, remove ${leads.map((l) => `workers.relay.${l}`).join(", ")} from the owner config.
-`
-  );
+  o2.stdout(`${t.uninstallNext(leads)}
+`);
   return 0;
 }
 async function unpair(o2) {
   if (!WORKER_LABEL_RE.test(o2.label))
     throw new Error("relay unpair: a label is ^[a-z][a-z0-9-]{0,31}$");
+  if (o2.values?.["dry-run"] === true) {
+    o2.stdout(
+      `would remove the pairing of ${o2.label} and rewrite the authorized keys without its key
+`
+    );
+    return 0;
+  }
   await windowsAdmin({ ...o2, what: "unpair" });
   const all = readPairings(o2.machine);
   const known = o2.label in all;
@@ -66387,6 +66765,16 @@ async function pairStart(o2) {
   const exec = o2.exec ?? systemExec;
   const key = leadKeyFile(o2.owner, o2.label);
   leadFilesProblem(o2.owner, key, o2.platform ?? detectPlatform());
+  const t = setupText({ owner: o2.owner, env: o2.env });
+  if (o2.values["dry-run"] === true) {
+    o2.stdout(`${t.dryRun}
+`);
+    o2.stdout(
+      `${t.would(`make the key ${key} (ed25519) for ${user}@${o2.host}:${port} and print the one line for the PC; it waits an hour`)}
+`
+    );
+    return 0;
+  }
   mkdirSync13(dirname19(key), { recursive: true, mode: 448 });
   rmSync13(key, { force: true });
   rmSync13(`${key}.pub`, { force: true });
@@ -66416,13 +66804,15 @@ async function pairStart(o2) {
   });
   const line4 = renderPairLine({ label: o2.label, secret, key: pub });
   o2.stdout(
-    `On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH), within the hour:
-  ${bootstrapCommand(line4)}
-It installs Node.js and Git if missing (it asks first), Studio ${STUDIO_VERSION} and the relay worker.
-With Studio there already: studio relay install --pair "${line4}"
-Then here: studio relay pair ${o2.label} --connect
-The line holds a single-use secret: paste it on the worker only.
-`
+    [
+      `1. ${t.pairPc}`,
+      `   ${bootstrapCommand(line4)}`,
+      `   ${t.pairWhat(STUDIO_VERSION)}`,
+      `   ${t.pairHasStudio(`studio relay install --pair "${line4}"`)}`,
+      `2. ${t.pairThen(`studio relay pair ${o2.label} --connect`)}`,
+      t.pairSecret,
+      ""
+    ].join("\n")
   );
   return 0;
 }
@@ -66432,6 +66822,16 @@ async function pairConnect(o2) {
     throw new Error(
       `no pairing of ${o2.label} is waiting (none started, or used already): studio relay pair ${o2.label} <host>`
     );
+  }
+  const t = setupText({ owner: o2.owner, env: o2.env });
+  if (o2.values["dry-run"] === true) {
+    o2.stdout(`${t.dryRun}
+`);
+    o2.stdout(
+      `${t.would(`read the host key of ${p.host}:${p.port}, connect with it pinned, keep it only with the pairing's proof, write workers.relay.${o2.label} and check the worker end to end`)}
+`
+    );
+    return 0;
   }
   const scan = await (o2.exec ?? systemExec)("ssh-keyscan", [
     "-T",
@@ -66472,10 +66872,28 @@ async function pairConnect(o2) {
   });
   dropPending(o2.owner, o2.label);
   o2.stdout(
-    `paired: ${o2.label} is ${p.user}@${p.host}:${p.port}, Studio ${answer2.studio} on ${answer2.platform}, host key pinned (${keyFingerprint(key)}). studio doctor checks it end to end.
+    `${t.paired(o2.label, `${p.user}@${p.host}:${p.port}`, answer2.studio, answer2.platform, keyFingerprint(key))}
 `
   );
-  return 0;
+  let pins = [];
+  try {
+    pins = pinnedPlugins(void 0, loadOwnerConfig(o2.owner).allowedPlugins);
+  } catch {
+    pins = [];
+  }
+  let check2;
+  try {
+    check2 = await relayDoctor({ transport, label: o2.label, studioVersion: STUDIO_VERSION, pins });
+  } catch (e) {
+    check2 = { ok: false, lines: [`${o2.label}: ${e.message}`] };
+  }
+  for (const l of check2.lines) o2.stdout(`  ${l}
+`);
+  o2.stdout(
+    `${t.next(check2.ok ? `runs_on: ${o2.label} on an item runs it there` : `fix what the lines above say, then studio doctor`)}
+`
+  );
+  return check2.ok ? 0 : 1;
 }
 
 // src/setup.ts
@@ -66493,21 +66911,6 @@ import { homedir as homedir14 } from "node:os";
 import { dirname as dirname20, join as join64, resolve as resolve15 } from "node:path";
 var DEFAULT_LABEL2 = "main";
 var MAX_LABEL = 32;
-var TOKEN_TEXT = [
-  "   Crews push their branches and open pull requests with a GitHub token of their own, never",
-  "   with your gh login. Create a fine-grained token on GitHub (Settings, Developer settings,",
-  "   Personal access tokens), limited to this project's repositories, with",
-  "   contents and pull requests read/write and nothing else (no administration, no workflows).",
-  "   Studio checks it once against the repository and stores it with mode 0600; it is never shown.",
-  "   The token goes only into the hidden prompt."
-];
-var ACCOUNT_TEXT = [
-  "   Crews run Claude Code with a token of their own, so your own login stays yours. In another",
-  "   terminal tab run: claude setup-token",
-  "   It prints a token valid for one year (it needs a Pro, Max, Ultra, Team or Enterprise plan).",
-  `   First you type a short label for this account (visible; Enter keeps ${DEFAULT_LABEL2}).`,
-  "   Then you paste the token at the second prompt (hidden)."
-];
 var LOOKS_LIKE_TOKEN = /^(sk-ant|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)/;
 var SHIM_MARKER = "# studio-shim v1";
 var PICK = [
@@ -66547,7 +66950,6 @@ if [ -z "$launcher" ]; then
 fi
 exec node "$launcher" "$@"
 `;
-var SHIM_NOTE = "   The shim finds the plugin again after an update; no need to run --link again.";
 var shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 function studioOnPath(env) {
   for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
@@ -66560,7 +66962,7 @@ function studioOnPath(env) {
   }
   return void 0;
 }
-var yes = (answer2) => /^(|y|yes)$/i.test(answer2.trim());
+var yes = (answer2) => /^(|y|yes|j|ja)$/i.test(answer2.trim());
 function writeAtomic2(file4, text2, mode) {
   const tmp = join64(dirname20(file4), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
@@ -66572,7 +66974,7 @@ function writeAtomic2(file4, text2, mode) {
     throw e;
   }
 }
-async function tokenRepo(o2) {
+async function tokenRepo(o2, t) {
   try {
     return readPrimaryRepo(o2.project);
   } catch {
@@ -66583,56 +66985,56 @@ async function tokenRepo(o2) {
     if (repo2 !== void 0) return repo2;
   } catch {
   }
-  o2.stdout(
-    "   No GitHub repository found here. The next prompt is visible; the token comes after.\n"
-  );
-  const answer2 = await o2.readLine?.("   Repository the crews work on, as owner/name (visible): ");
+  if (o2.dryRun === true) return void 0;
+  o2.stdout(`${t.noRepo}
+`);
+  const answer2 = await o2.readLine?.(t.repoPrompt);
   if (answer2 === void 0) return void 0;
   const repo = answer2.trim();
   if (LOOKS_LIKE_TOKEN.test(repo) || repo.length > 100) {
-    o2.stdout("   that looks like a token \u2014 it was not stored; enter owner/name\n");
+    o2.stdout(`${t.repoLooksLikeToken}
+`);
     return void 0;
   }
   try {
     return assertPrimaryRepo(repo);
   } catch {
-    o2.stdout("   that is not owner/name; nothing stored\n");
+    o2.stdout(`${t.repoNotOwnerName}
+`);
     return void 0;
   }
 }
-async function accountLabel(o2) {
-  const answer2 = await o2.readLine?.(
-    `   Short label for this account, visible (Enter keeps ${DEFAULT_LABEL2}) [${DEFAULT_LABEL2}]: `
-  );
+async function accountLabel(o2, t) {
+  const answer2 = await o2.readLine?.(t.labelPrompt(DEFAULT_LABEL2));
   if (answer2 === void 0) return void 0;
   const label = answer2.trim() === "" ? DEFAULT_LABEL2 : answer2.trim();
   if (LOOKS_LIKE_TOKEN.test(label) || label.length > MAX_LABEL) {
-    o2.stdout("   that looks like a token \u2014 it was not stored; enter a short label\n");
+    o2.stdout(`${t.labelLooksLikeToken}
+`);
     return void 0;
   }
   if (!validLabel(label) || label.startsWith(".")) {
-    o2.stdout(
-      "   a label has letters, digits, dot, dash or underscore and does not start with a dot; nothing stored\n"
-    );
+    o2.stdout(`${t.labelBad}
+`);
     return void 0;
   }
   return label;
 }
-async function link(o2, home) {
+async function link(o2, home, t) {
   const say = (s) => o2.stdout(`${safe(s)}
 `);
   if (o2.launcher === void 0) {
-    say("4. studio in your terminal: cannot tell where the plugin is; nothing written");
+    say(t.step(4, t.terminal, t.noPlugin));
     return 0;
   }
   const launcher2 = o2.launcher;
+  const run2 = `node ${shQuote(launcher2)} <command>`;
   const localBin = join64(home, ".local", "bin");
   const onPath2 = (o2.env.PATH ?? "").split(":").some((d) => d !== "" && resolve15(d) === resolve15(localBin));
   if (!onPath2) {
-    say("4. studio in your terminal: ~/.local/bin is not on your PATH.");
-    say("   Studio does not edit shell files. Add ~/.local/bin to PATH in your shell's startup");
-    say("   file, open a new terminal and run studio setup --link again.");
-    say(`   Until then: node ${shQuote(launcher2)} <command>`);
+    say(t.step(4, t.terminal, t.localBinOff));
+    for (const l of t.localBinHelp) say(l);
+    say(t.untilThen(run2));
     return 0;
   }
   const target = join64(localBin, "studio");
@@ -66649,55 +67051,52 @@ async function link(o2, home) {
 `, 384);
   };
   if (current === SHIM) {
-    writeCache();
-    say(`4. studio in your terminal: done (${target})`);
-    say(SHIM_NOTE);
+    if (o2.dryRun !== true) writeCache();
+    say(t.step(4, t.terminal, t.done(target)));
+    say(t.shimNote);
     return 0;
   }
   let prompt;
-  if (current === void 0) prompt = `   Write the Studio shim ${target}? [Y/n] `;
+  if (current === void 0) prompt = t.writePrompt(target);
   else if (current.split("\n")[1] === SHIM_MARKER) {
-    prompt = `   Update the Studio shim ${target}? [Y/n] `;
+    prompt = t.updatePrompt(target);
   } else {
-    say(`4. studio in your terminal: ${target} is not a Studio shim; nothing changed.`);
-    say("   Move it away and run studio setup --link again, or keep it.");
+    say(t.step(4, t.terminal, t.notAShim(target)));
+    say(t.notAShimHelp);
     return 1;
   }
-  say("4. studio in your terminal:");
+  say(t.stepOpen(4, t.terminal));
+  if (o2.dryRun === true) {
+    say(t.would(`write ${target} and ${cache2} (it asks first)`));
+    return 0;
+  }
   const answer2 = await o2.readLine?.(safe(prompt));
   if (answer2 === void 0 || !yes(answer2)) {
-    say(`   nothing written; until you do: node ${shQuote(launcher2)} <command>`);
+    say(t.nothingWritten(run2));
     return 0;
   }
   mkdirSync14(localBin, { recursive: true });
   writeCache();
   writeAtomic2(target, SHIM, 493);
-  say(`   wrote ${target}`);
-  say(SHIM_NOTE);
+  say(t.wrote(target));
+  say(t.shimNote);
   return 0;
 }
-var RESEARCH_TEXT = [
-  "   A researcher crew can reverse engineer shipped programs with REA (rea-agents). Studio installs",
-  "   it once into its own state, checked against the npm registry, and grants it one analysis",
-  "   folder. REA tools run with your user rights outside the sandbox. Skip it if you never need it:",
-  "   Studio asks again the first time a researcher item needs it."
-];
 async function researchStep(o2, standalone) {
   const say = (s) => o2.stdout(`${safe(s)}
 `);
   if (o2.env.STUDIO_ROLE === "crew") throw new Error("this command is not for crew sessions");
-  if (!o2.isTerminal || o2.readLine === void 0) {
+  if (o2.dryRun !== true && (!o2.isTerminal || o2.readLine === void 0)) {
     throw new Error(
       "studio setup research needs your own terminal; without one use studio research install --yes --folder <dir>. Nothing changed"
     );
   }
+  const t = setupText(o2);
   let config2;
   try {
     config2 = loadOwnerConfig(o2.owner);
   } catch {
-    say(
-      "6. Reverse engineering: the owner config cannot be read; fix it with studio doctor. Nothing changed."
-    );
+    say(t.step(6, t.research, t.researchConfigBad));
     return 1;
   }
   const ownerRoot = ownerStateRootFor(o2.owner);
@@ -66709,24 +67108,27 @@ async function researchStep(o2, standalone) {
   } catch {
     installed = false;
   }
-  const modeWord = mode === "full" ? "trust mode" : "strict mode";
+  const modeWord = mode === "full" ? t.trustMode : t.strictMode;
   if (installed && config2.researchRoots.length > 0) {
-    say(
-      `6. Reverse engineering: done (rea-agents ${version2}, ${modeWord}, ${config2.researchRoots.join(", ")})`
-    );
+    say(t.step(6, t.research, t.researchDone(version2, modeWord, config2.researchRoots.join(", "))));
     return 0;
   }
   if (!standalone && setupSkipped(ownerRoot)) {
-    say("6. Reverse engineering (optional): skipped; studio setup research sets it up");
+    say(t.step(6, t.researchOptional, t.researchSkipped));
     return 0;
   }
-  say("6. Reverse engineering (optional): not set up");
-  for (const l of RESEARCH_TEXT) say(l);
+  say(t.step(6, t.researchOptional, t.notSetUp));
+  if (o2.dryRun === true) {
+    say(t.would(`offer REA (rea-agents ${version2}) for researcher crews; studio setup research`));
+    return 0;
+  }
+  for (const l of t.researchText) say(l);
+  const readLine = o2.readLine;
   if (!standalone) {
-    const answer2 = await o2.readLine("   Set it up now? [y/N] ");
-    if (answer2 === void 0 || !["y", "yes"].includes(answer2.trim().toLowerCase())) {
+    const answer2 = await readLine(t.researchPrompt);
+    if (answer2 === void 0 || !["y", "yes", "j", "ja"].includes(answer2.trim().toLowerCase())) {
       recordSetupSkip(ownerRoot, o2.ports.clock.now());
-      say("   skipped; later: studio setup research");
+      say(t.researchLater);
       return 0;
     }
   }
@@ -66738,67 +67140,76 @@ async function researchStep(o2, standalone) {
       ports: o2.ports,
       asker: {
         isTerminal: true,
-        readLine: (p) => o2.readLine(`   ${p}`),
+        readLine: (p) => readLine(`   ${p}`),
         say: (l) => say(`   ${l}`)
       },
       now: o2.ports.clock.now()
     });
-    say(`   done (rea-agents ${r.version}, ${modeWord}${r.installed ? ", installed now" : ""})`);
+    say(t.researchInstalled(r.version, modeWord, r.installed));
     return 0;
   } catch (e) {
     say(`   ${e.message}`);
     return 1;
   }
 }
-var NOTIFY_TEXT = [
-  "   Studio can push one line to your phone when it needs a decision: a fixed phrase, the item",
-  "   id and the project name, nothing else. It uses ntfy, which needs no account: Studio makes a",
-  "   secret topic, you subscribe to it in the ntfy app."
-];
-async function notificationsStep(o2, again) {
+async function notificationsStep(o2, again, t) {
   const say = (s) => o2.stdout(`${safe(s)}
 `);
   let config2;
   try {
     config2 = loadOwnerConfig(o2.owner);
   } catch {
-    say("5. Notifications: the owner config cannot be read; fix it with studio doctor, then run");
-    say("   studio setup --notifications. Nothing stored.");
+    const [first, ...rest] = t.notifyConfigBad;
+    say(t.step(5, t.notifications, first ?? ""));
+    for (const l of rest) say(l);
     return 1;
   }
   const stored = readNotifySecret(o2.owner);
   if (stored.kind === "ok" && !again) {
-    say(`5. Notifications: done (${stored.secret.transport})`);
+    say(t.step(5, t.notifications, t.done(stored.secret.transport)));
     return 0;
   }
   say(
-    `5. Notifications: ${stored.kind === "bad" ? "the stored file is not usable" : stored.kind === "ok" ? `set up (${stored.secret.transport}), set up again` : "none"}`
+    t.step(
+      5,
+      t.notifications,
+      t.notifyState(
+        stored.kind === "absent" ? "none" : stored.kind,
+        stored.kind === "ok" ? stored.secret.transport : ""
+      )
+    )
   );
-  for (const l of NOTIFY_TEXT) say(l);
-  const answer2 = await o2.readLine?.("   ntfy or none? [ntfy/none] (Enter: ntfy): ");
-  const choice = answer2?.trim().toLowerCase();
-  if (choice === void 0 || ["none", "n", "no", "skip"].includes(choice)) {
+  if (o2.dryRun === true) {
     say(
-      `   ${stored.kind === "ok" ? "unchanged" : "no notifications"}; later: studio setup --notifications`
+      t.would(
+        "offer push notifications through ntfy: a new secret topic, a test push, then stored"
+      )
     );
     return 0;
   }
+  for (const l of t.notifyText) say(l);
+  const answer2 = await o2.readLine?.(t.notifyPrompt);
+  const choice = answer2?.trim().toLowerCase();
+  if (choice === void 0 || ["none", "n", "no", "nein", "skip"].includes(choice)) {
+    say(t.notifyNone(stored.kind === "ok"));
+    return 0;
+  }
   if (choice !== "" && choice !== "ntfy") {
-    say("   answer ntfy or none; nothing stored");
+    say(t.notifyAnswer);
     return 1;
   }
   const http = o2.ports.http;
   if (http === void 0) {
-    say("   no HTTPS client in this process; nothing stored");
+    say(t.noHttps);
     return 1;
   }
   const secret = { transport: "ntfy", topic: newNtfyTopic() };
-  say("   Install the ntfy app and open this link:");
+  say(t.notifyOpen);
   say(`   ${subscribeLink(config2, secret)}`);
-  say("   The link is the secret: whoever has it reads your pushes. Studio shows it only here.");
-  const ready = await o2.readLine?.("   Press Enter once you subscribed (type skip to stop): ");
+  say(t.notifySecret);
+  const ready = await o2.readLine?.(t.notifyReady);
   if (ready === void 0 || ready.trim().toLowerCase() === "skip") {
-    say("   nothing stored; later: studio setup --notifications");
+    say(t.notifyLater);
     return 0;
   }
   const reply2 = await sendPush(http, secret, config2, {
@@ -66806,22 +67217,22 @@ async function notificationsStep(o2, again) {
     urgent: false
   });
   if (!reply2.ok) {
-    say(`   test push failed: ${pushFailure(reply2)}; nothing stored`);
+    say(t.notifyFailed(pushFailure(reply2)));
     return 1;
   }
   installNotifySecret(secret, o2.owner);
-  say("   test push sent; check your phone. Topic stored.");
+  say(t.notifySent);
   return 0;
 }
 var MIN_NODE_MAJOR2 = 24;
-function machineStep(o2, platform2, kind) {
+function machineStep(o2, platform2, kind, t) {
   const say = (s) => o2.stdout(`${safe(s)}
 `);
   const which = o2.which ?? ((name) => onPath(name, o2.env));
-  const problem = leadMachineProblem(kind, o2.env);
-  if (problem !== void 0) {
-    say(`0. This machine: ${problem.why}`);
-    say(`   Fix: ${problem.fix}`);
+  if (leadMachineProblem(kind, o2.env) !== void 0) {
+    const [why, fix] = kind === "windows" ? [t.windowsWhy, t.windowsFix] : kind === "wsl1" ? [t.wsl1Why, t.wsl1Fix(o2.env.WSL_DISTRO_NAME ?? "<distribution>")] : [t.otherWhy, t.otherFix];
+    say(t.step(0, t.machine, why));
+    say(t.fix(fix));
     return false;
   }
   const label = kind === "macos" ? "macOS" : kind === "wsl2" ? `WSL2 (${o2.env.WSL_DISTRO_NAME ?? "Linux"})` : "Linux";
@@ -66833,11 +67244,12 @@ function machineStep(o2, platform2, kind) {
     ...kind !== "macos" && (which("bwrap") === void 0 || which("socat") === void 0) ? ["sandbox"] : []
   ];
   if (missing.length > 0) {
-    say(
-      `0. This machine: ${label}; missing: ${missing.map((t) => t === "node" ? `Node.js ${MIN_NODE_MAJOR2} (this is ${node2})` : t === "sandbox" ? "bubblewrap and socat (Claude Code's sandbox)" : t).join(", ")}`
+    const named2 = missing.map(
+      (m) => m === "node" ? t.nodeOld(MIN_NODE_MAJOR2, node2) : m === "sandbox" ? t.sandboxTools : m
     );
-    for (const t of missing) say(`   ${t}: ${installCommand(t, kind)}`);
-    say("   Then open a new terminal and run studio setup again.");
+    say(t.step(0, t.machine, t.missing(label, named2.join(", "))));
+    for (const m of missing) say(t.tool(m, installCommand(m, kind)));
+    say(t.newTerminal);
     return false;
   }
   if (kind === "wsl2") {
@@ -66846,118 +67258,127 @@ function machineStep(o2, platform2, kind) {
       ["state", ownerStateRootFor(o2.owner)]
     ]) {
       if (onWindowsDrive(dir, platform2)) {
-        say(
-          `0. This machine: ${label}; Studio's ${what} folder ${dir} is on a Windows drive, which keeps no file modes (tokens and keys there would be open)`
-        );
-        say(
-          "   Fix: unset XDG_CONFIG_HOME and XDG_STATE_HOME, or point them below ~ in the Linux file system, then run studio setup again."
-        );
+        say(t.step(0, t.machine, t.onWindowsDrive(label, what, dir)));
+        say(t.onWindowsDriveFix);
         return false;
       }
     }
   }
-  say(`0. This machine: done (${label}, git, Node.js ${node2}, claude)`);
-  if (kind === "wsl2" && onWindowsDrive(o2.project, platform2)) {
-    say(
-      `   Note: the project ${o2.project} is on a Windows drive; clone it into the Linux file system (under ~) for speed and exact file modes.`
-    );
-  }
+  say(t.step(0, t.machine, t.machineDone(label, node2)));
+  if (kind === "wsl2" && onWindowsDrive(o2.project, platform2)) say(t.projectOnWindows(o2.project));
   if (which("ssh") === void 0 || which("ssh-keygen") === void 0) {
-    say(`   For relay workers later: ssh and ssh-keygen (${installCommand("ssh", kind)}).`);
+    say(t.sshLater(installCommand("ssh", kind)));
   }
   return true;
 }
 async function runSetup(o2) {
   if (o2.env.STUDIO_ROLE === "crew") throw new Error("this command is not for crew sessions");
-  if (!o2.isTerminal || o2.readSecret === void 0 || o2.readLine === void 0) {
+  const dry = o2.dryRun === true;
+  if (!dry && (!o2.isTerminal || o2.readSecret === void 0 || o2.readLine === void 0)) {
     throw new Error(
-      "studio setup needs your own terminal (it asks for tokens with hidden input); run it there, not inside Claude Code. Nothing changed"
+      "studio setup needs your own terminal (it asks for tokens with hidden input); run it there, not inside Claude Code (studio setup --dry-run shows the steps anywhere). Nothing changed"
     );
   }
+  const t = setupText(o2);
   const say = (s) => o2.stdout(`${safe(s)}
 `);
   const home = o2.owner.homedir ?? homedir14();
-  if (o2.notifications === true) return await notificationsStep(o2, true);
+  if (dry) say(t.dryRun);
+  if (o2.notifications === true) return await notificationsStep(o2, true, t);
   const platform2 = o2.platform ?? detectPlatform();
   const kind = leadKind(platform2);
-  if (!machineStep(o2, platform2, kind)) return 1;
+  if (!machineStep(o2, platform2, kind, t)) return 1;
   const gh = await ghCheck(o2.ports);
   if (gh.status !== "pass") {
-    say(`1. GitHub CLI: ${gh.detail}`);
-    const fix = gh.fix?.startsWith("install the GitHub CLI") ? `${installCommand("gh", kind)}, then gh auth login` : gh.fix ?? "gh auth login";
-    say(`   Fix: ${fix}, then run studio setup again.`);
+    say(t.step(1, t.gh, gh.detail));
+    const fix = gh.fix?.startsWith("install the GitHub CLI") ? t.ghInstall(installCommand("gh", kind)) : gh.fix ?? "gh auth login";
+    say(t.ghFix(fix));
     return 1;
   }
-  say(`1. GitHub CLI: done (${gh.detail})`);
+  say(t.step(1, t.gh, t.done(gh.detail)));
   const { report } = await doctorReport(o2);
   if (report.crewToken.status === "set") {
-    say(`2. Crew token: done (${report.crewToken.source ?? "set"})`);
+    say(t.step(2, t.token, t.done(report.crewToken.source ?? "set")));
   } else {
-    say(
-      `2. Crew token: ${report.crewToken.status === "invalid" ? "the stored file is not usable" : "missing"}`
-    );
-    for (const l of TOKEN_TEXT) say(l);
-    const repo = await tokenRepo(o2);
-    if (repo === void 0) return 1;
-    const code = await runSecretSet({
-      project: o2.project,
-      ports: o2.ports,
-      owner: o2.owner,
-      readSecret: o2.readSecret,
-      stdout: (s) => o2.stdout(`   ${s}`),
-      repo
-    });
-    if (code !== 0) {
-      say("   Nothing stored. Fix the token on GitHub, then run studio setup again.");
-      return code;
-    }
-  }
-  if (report.claudeLogin.startsWith("accounts, but")) {
-    say(`3. Claude account for crews: ${report.claudeLogin}`);
-    say("   Run studio account list and studio doctor to see what is wrong.");
-    return 1;
-  }
-  if (report.credentialProvider !== null || report.accounts.length > 0) {
-    say(`3. Claude account for crews: done (${report.claudeLogin})`);
-  } else {
-    say("3. Claude account for crews: none stored");
-    for (const l of ACCOUNT_TEXT) say(l);
-    const label = await accountLabel(o2);
-    if (label === void 0) return 1;
-    const code = await runAccount({
-      args: ["add", label],
-      owner: o2.owner,
-      ownerRoot: ownerStateRootFor(o2.owner),
-      ports: o2.ports,
-      env: o2.env,
-      json: false,
-      isTerminal: true,
-      readSecret: o2.readSecret,
-      stdout: (s) => o2.stdout(`   ${s}`),
-      stderr: o2.stderr
-    });
-    if (code !== 0) return code;
-  }
-  if (o2.link) {
-    const code = await link(o2, home);
-    if (code !== 0) return code;
-  } else {
-    const found = studioOnPath(o2.env);
-    if (found !== void 0) say(`4. studio in your terminal: done (${found})`);
-    else {
-      say("4. studio in your terminal: not on your PATH (Claude Code finds it on its own).");
-      say("   To use studio in any terminal: studio setup --link");
-      if (o2.launcher !== void 0) {
-        say(`   (until then: node ${shQuote(o2.launcher)} <command>)`);
+    say(t.step(2, t.token, report.crewToken.status === "invalid" ? t.unusable : t.missingWord));
+    if (dry) {
+      const repo = await tokenRepo(o2, t);
+      say(
+        t.would(
+          `ask for the crew token at a hidden prompt, check it against ${repo ?? "<owner/name, asked first>"} and store it (mode 0600)`
+        )
+      );
+    } else {
+      for (const l of t.tokenText) say(l);
+      const repo = await tokenRepo(o2, t);
+      if (repo === void 0) return 1;
+      const code = await runSecretSet({
+        project: o2.project,
+        ports: o2.ports,
+        owner: o2.owner,
+        readSecret: o2.readSecret,
+        stdout: (s) => o2.stdout(`   ${s}`),
+        repo
+      });
+      if (code !== 0) {
+        say(t.tokenNothing);
+        return code;
       }
     }
   }
-  const notified = await notificationsStep(o2, false);
+  if (report.claudeLogin.startsWith("accounts, but")) {
+    say(t.step(3, t.account, report.claudeLogin));
+    say(t.accountWrong);
+    return 1;
+  }
+  if (report.credentialProvider !== null || report.accounts.length > 0) {
+    say(t.step(3, t.account, t.done(report.claudeLogin)));
+  } else {
+    say(t.step(3, t.account, t.noneStored));
+    if (dry) {
+      say(
+        t.would(
+          `ask for a label (Enter keeps ${DEFAULT_LABEL2}) and the token of claude setup-token at a hidden prompt, then store it`
+        )
+      );
+    } else {
+      for (const l of t.accountText(DEFAULT_LABEL2)) say(l);
+      const label = await accountLabel(o2, t);
+      if (label === void 0) return 1;
+      const code = await runAccount({
+        args: ["add", label],
+        owner: o2.owner,
+        ownerRoot: ownerStateRootFor(o2.owner),
+        ports: o2.ports,
+        env: o2.env,
+        json: false,
+        isTerminal: true,
+        readSecret: o2.readSecret,
+        nested: true,
+        stdout: (s) => o2.stdout(`   ${s}`),
+        stderr: o2.stderr
+      });
+      if (code !== 0) return code;
+    }
+  }
+  if (o2.link) {
+    const code = await link(o2, home, t);
+    if (code !== 0) return code;
+  } else {
+    const found = studioOnPath(o2.env);
+    if (found !== void 0) say(t.step(4, t.terminal, t.done(found)));
+    else {
+      say(t.step(4, t.terminal, t.notOnPath));
+      say(t.linkHint);
+      if (o2.launcher !== void 0) say(t.untilParen(`node ${shQuote(o2.launcher)} <command>`));
+    }
+  }
+  const notified = await notificationsStep(o2, false, t);
   if (notified !== 0) return notified;
   const researched = await researchStep(o2, false);
   if (researched !== 0) return researched;
   say("");
-  say("Done. Now open your project in Claude Code and run /studio:init.");
+  say(dry ? t.dryRun : t.finalNext);
   return 0;
 }
 
@@ -67355,8 +67776,10 @@ async function runCli(argv, deps) {
         "--reason works with lessons drop, exceptions grant and release cancel only"
       );
     }
-    if (values["dry-run"] !== void 0 && cmd !== "recover" && cmd !== "release" && cmd !== "tick") {
-      throw new UsageError("--dry-run works with recover, release and tick only");
+    if (values["dry-run"] !== void 0 && cmd !== "recover" && cmd !== "release" && cmd !== "tick" && cmd !== "setup" && cmd !== "account" && cmd !== "relay") {
+      throw new UsageError(
+        "--dry-run works with recover, release, tick, setup, account add and relay pair, install, uninstall and unpair only"
+      );
     }
     if (values.by !== void 0 && cmd !== "release" && cmd !== "merge") {
       throw new UsageError("--by works with release and merge only");
@@ -70592,6 +71015,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
             ...deps.launcher === void 0 ? {} : { launcher: deps.launcher },
             ...deps.workerPlatform === void 0 ? {} : { platform: deps.workerPlatform },
             ...deps.which === void 0 ? {} : { which: deps.which },
+            dryRun: values["dry-run"] === true,
             stdout,
             stderr
           });
@@ -70768,6 +71192,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
           isTerminal: deps.isTerminal === true,
           ...deps.readSecret === void 0 ? {} : { readSecret: deps.readSecret },
           pins: () => projectPins(project, owner),
+          dryRun: values["dry-run"] === true,
           stdout,
           stderr
         });

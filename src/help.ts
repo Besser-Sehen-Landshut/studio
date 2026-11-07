@@ -79,28 +79,28 @@ export const COMMANDS: HelpEntry[] = [
     about: 'On a relay worker: the runner a start hands its job to (Studio starts it, not you)',
   },
   {
-    usage: 'relay pair <label> <host> [--port <n>] [--user <name>]',
+    usage: 'relay pair <label> <host> [--port <n>] [--user <name>] [--dry-run]',
     about: "On the lead: make the lead's key for a relay worker and print the one pairing line",
   },
   {
-    usage: 'relay pair <label> --connect',
+    usage: 'relay pair <label> --connect [--dry-run]',
     about:
       'On the lead: pin the host key the worker proves with the pairing secret; write workers.relay.<label>',
   },
   {
     usage:
-      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--i-am-local] [--force-stop]',
+      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--i-am-local] [--force-stop] [--dry-run]',
     about:
       'On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead',
   },
   {
     usage:
-      'relay uninstall [--keep-tree] [--force-stop] [--user <name>] [--home <dir>] [--i-am-local]',
+      'relay uninstall [--keep-tree] [--force-stop] [--user <name>] [--home <dir>] [--i-am-local] [--dry-run]',
     about:
       'On a Windows worker, elevated: remove everything relay install made, every lead first; run again to finish',
   },
   {
-    usage: 'relay unpair <label> [--home <dir>]',
+    usage: 'relay unpair <label> [--home <dir>] [--dry-run]',
     about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key",
   },
   {
@@ -225,7 +225,7 @@ export const COMMANDS: HelpEntry[] = [
       'Pinned plugins against their marketplaces and sources against upstream; one board item per update. Monthly (tick runs it); --now runs it at once, --security marks an update as security-relevant (priority 0)',
   },
   {
-    usage: 'setup [--link] [--notifications]',
+    usage: 'setup [--link] [--notifications] [--dry-run]',
     about:
       "Owner only, in a terminal: gh, crew token, Claude account, studio on your terminal's PATH (--link), phone notifications and, optionally, REA for researcher crews; one guided step each, skipped when done; --notifications runs only that step again",
   },
@@ -258,7 +258,7 @@ export const COMMANDS: HelpEntry[] = [
       'List the clones, crew homes and tmp dirs of finished items with their sizes and whether they can go; a dry run without --apply, which removes them (the tick does too)',
   },
   {
-    usage: 'account add <label>',
+    usage: 'account add <label> [--dry-run]',
     about: 'Owner only, in a terminal: store a token from claude setup-token',
   },
   { usage: 'account list', about: 'Stored Claude accounts and their state, never a token' },

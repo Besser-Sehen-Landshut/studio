@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadOwnerConfig } from '../src/config.js';
+import { pinnedPlugins, STUDIO_VERSION } from '../src/plugins.js';
 import { realPorts } from '../src/ports.js';
 import { type Exec, relayContext, runRelayCommand } from '../src/relay-command.js';
 import {
@@ -38,6 +39,16 @@ import {
 } from '../src/relay-windows.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-relay-pair-')));
+/** A worker with exactly the pinned plugins, and a probe that holds. */
+const PINNED = Object.fromEntries(pinnedPlugins().map((p) => [p.name, p.version]));
+const PROBE_OK = {
+  studioRelay: 1,
+  ok: true,
+  problem: null,
+  kind: null,
+  load: { cpuPercent: 5, freeDiskGb: 100 },
+  warnings: [],
+};
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 let n = 0;
 
@@ -255,7 +266,9 @@ describe('the authorized keys of a worker are exactly its pairings', () => {
 });
 
 describe('studio relay pair on the lead', () => {
-  function setup(o: { workerSecret?: (line: string) => string; workerHost?: string } = {}) {
+  function setup(
+    o: { workerSecret?: (line: string) => string; workerHost?: string; workerStudio?: string } = {},
+  ) {
     const home = join(root, `lead-${n++}`);
     mkdirSync(home);
     const owner = { env: { PATH: process.env.PATH }, homedir: home };
@@ -266,14 +279,23 @@ describe('studio relay pair on the lead', () => {
     let secret: string | undefined;
     const transport: RelayTransport = {
       async call(header) {
-        expect(header.op).toBe('hello');
+        // After pinning, connect checks the worker as doctor does: hello, then its probe.
+        expect(['hello', 'probe']).toContain(header.op);
+        if (header.op === 'probe') {
+          return (await readMessage(
+            new LineReader(chunks(encodeMessage(PROBE_OK)), 1 << 20),
+            0,
+          )) as {
+            header: Record<string, unknown>;
+          };
+        }
         const lines = [
           ...encodeMessage({
             studioRelay: 1,
             ok: true,
-            studio: '9.9.9',
+            studio: o.workerStudio ?? STUDIO_VERSION,
             platform: 'win32',
-            plugins: {},
+            plugins: PINNED,
             busy: null,
             held: null,
             // The worker proves its own host key, whatever key the lead was shown.
@@ -343,6 +365,28 @@ describe('studio relay pair on the lead', () => {
     await expect(s.run(['pair', 'lab'], { connect: true })).rejects.toThrow(
       /no pairing of lab is waiting/,
     );
+  });
+
+  it('checks the worker end to end right after pinning, as doctor does, and says what comes next', async () => {
+    const good = setup();
+    await good.run(['pair', 'lab', 'worker.example']);
+    good.workerTakes();
+    expect(await good.run(['pair', 'lab'], { connect: true })).toBe(0);
+    expect(good.out.join('')).toContain('  lab: reachable, Studio');
+    expect(good.out.join('')).toContain('  lab: CPU 5 %, 100.0 GB free');
+    expect(good.out.join('')).toContain('Done. Next: runs_on: lab on an item runs it there');
+    // Pinned all the same when the check finds something: it names the fix and exits 1.
+    const old = setup({ workerStudio: '0.0.1' });
+    await old.run(['pair', 'lab', 'worker.example']);
+    old.workerTakes();
+    expect(await old.run(['pair', 'lab'], { connect: true })).toBe(1);
+    expect(old.out.join('')).toMatch(
+      /Studio 0\.0\.1 there, .* here; fix: update Studio on the worker/,
+    );
+    expect(old.out.join('')).toContain(
+      'Done. Next: fix what the lines above say, then studio doctor',
+    );
+    expect(loadOwnerConfig(old.owner).workers?.relay.lab).toBeDefined();
   });
 
   it('rejects another host key than the worker proves: nothing is pinned', async () => {

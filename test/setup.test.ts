@@ -207,6 +207,52 @@ async function setup(
   return { code, out, err, asked, all: out + err };
 }
 
+describe('studio setup --dry-run and the languages', () => {
+  it('a dry run checks every step, says what it would ask and store, and asks and writes nothing', async () => {
+    const fx = fixture({ notified: false, researchSkipped: false });
+    const before = readdirSync(fx.home, { recursive: true }).sort();
+    const r = await setup(fx, ['--dry-run'], { terminal: false });
+    expect(r.code).toBe(0);
+    expect(r.asked).toEqual([]);
+    expect(r.out.split('\n')[0]).toBe('Dry run: nothing is written, stored or changed.');
+    expect(r.out).toContain('2. Crew token: missing');
+    expect(r.out).toContain(
+      '   would ask for the crew token at a hidden prompt, check it against example-org/shop and store it (mode 0600)',
+    );
+    expect(r.out).toContain('3. Claude account for crews: none stored');
+    expect(r.out).toMatch(/would ask for a label \(Enter keeps main\)/);
+    expect(r.out).toContain('5. Notifications: none');
+    expect(r.out).toContain('would offer push notifications through ntfy');
+    expect(r.out).toContain('6. Reverse engineering (optional): not set up');
+    expect(r.out.trim().split('\n').at(-1)).toBe('Dry run: nothing is written, stored or changed.');
+    expect(readCrewTokenFile(fx.owner).kind).toBe('absent');
+    expect(listAccounts(fx.owner)).toEqual([]);
+    expect(readNotifySecret(fx.owner).kind).toBe('absent');
+    expect(readdirSync(fx.home, { recursive: true }).sort()).toEqual(before);
+  });
+
+  it('speaks German when the locale says so; commands stay as they are', async () => {
+    const fx = fixture({ studioOnPath: true });
+    installCrewToken(CREW_VALUE, fx.owner);
+    addAccount(fx.owner, 'main', ACCOUNT_VALUE, new Date('2026-11-01T00:00:00Z'));
+    const r = await setup(fx, [], { env: { LANG: 'de_DE.UTF-8' } });
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^0\. Dieser Rechner: erledigt \(Linux, git, Node\.js/m);
+    expect(r.out).toContain('1. GitHub CLI: erledigt (logged in to github.com)');
+    expect(r.out).toContain('2. Crew-Token: erledigt');
+    expect(r.out).toContain(
+      'Fertig. Jetzt das Projekt in Claude Code öffnen und /studio:init ausführen.',
+    );
+    const win = await setup(fixture(), [], {
+      env: { LANG: 'de_DE.UTF-8' },
+      platform: { platform: 'win32', wsl: 'none', automountRoot: '/mnt/' },
+    });
+    expect(win.out).toContain(
+      '   Behebung: in PowerShell als Administrator: wsl --install -d Ubuntu-24.04',
+    );
+  });
+});
+
 describe('studio setup', () => {
   it('asks nothing when every step is done', async () => {
     const fx = fixture({ studioOnPath: true });
