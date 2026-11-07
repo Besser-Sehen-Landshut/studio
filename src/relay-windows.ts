@@ -559,9 +559,16 @@ export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [stri
     if (Test-Path -LiteralPath $exe) {
       $sshdArgs = '-t -f "' + $tmp + '"'
       if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
-        $keyDir = Join-Path $env:ProgramData ('studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $keyDir | Out-Null
-        icacls $keyDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /L /Q | Out-Null
+        # Beside sshd_config, made with its final protected DACL (SYSTEM and administrators) in one
+        # step, and checked before use: no other account can put anything into it.
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))) }
+        $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        $keyDir = Join-Path $dir ('.studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
+        $null = [IO.Directory]::CreateDirectory($keyDir, $acl)
+        $made = Get-Item -LiteralPath $keyDir -Force
+        if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
         $key = Join-Path $keyDir 'host_ed25519'
         $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
         if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
@@ -575,7 +582,11 @@ export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [stri
     if (Test-Path -LiteralPath $conf) { [IO.File]::Replace($tmp, $conf, [NullString]::Value) } else { [IO.File]::Move($tmp, $conf) }
   } finally {
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-    if ($keyDir) { Remove-Item -LiteralPath $keyDir -Recurse -Force -ErrorAction SilentlyContinue }
+    # Only the files it made, by name, then the empty folder: nothing is followed or recursed.
+    if ($keyDir) {
+      foreach ($f in @('host_ed25519', 'host_ed25519.pub')) { Remove-Item -LiteralPath (Join-Path $keyDir $f) -Force -ErrorAction SilentlyContinue }
+      Remove-Item -LiteralPath $keyDir -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 `;

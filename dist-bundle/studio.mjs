@@ -40929,9 +40929,16 @@ var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text,
     if (Test-Path -LiteralPath $exe) {
       $sshdArgs = '-t -f "' + $tmp + '"'
       if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
-        $keyDir = Join-Path $env:ProgramData ('studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $keyDir | Out-Null
-        icacls $keyDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /L /Q | Out-Null
+        # Beside sshd_config, made with its final protected DACL (SYSTEM and administrators) in one
+        # step, and checked before use: no other account can put anything into it.
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))) }
+        $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        $keyDir = Join-Path $dir ('.studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
+        $null = [IO.Directory]::CreateDirectory($keyDir, $acl)
+        $made = Get-Item -LiteralPath $keyDir -Force
+        if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
         $key = Join-Path $keyDir 'host_ed25519'
         $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
         if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
@@ -40945,7 +40952,11 @@ var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text,
     if (Test-Path -LiteralPath $conf) { [IO.File]::Replace($tmp, $conf, [NullString]::Value) } else { [IO.File]::Move($tmp, $conf) }
   } finally {
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-    if ($keyDir) { Remove-Item -LiteralPath $keyDir -Recurse -Force -ErrorAction SilentlyContinue }
+    # Only the files it made, by name, then the empty folder: nothing is followed or recursed.
+    if ($keyDir) {
+      foreach ($f in @('host_ed25519', 'host_ed25519.pub')) { Remove-Item -LiteralPath (Join-Path $keyDir $f) -Force -ErrorAction SilentlyContinue }
+      Remove-Item -LiteralPath $keyDir -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 `;
@@ -61039,13 +61050,12 @@ import { spawn as spawn6 } from "node:child_process";
 import {
   existsSync as existsSync19,
   mkdirSync as mkdirSync13,
-  mkdtempSync as mkdtempSync4,
   readFileSync as readFileSync56,
   renameSync as renameSync16,
   rmSync as rmSync13,
   writeFileSync as writeFileSync21
 } from "node:fs";
-import { homedir as homedir13, tmpdir as tmpdir4 } from "node:os";
+import { homedir as homedir13 } from "node:os";
 import { dirname as dirname19, join as join62, resolve as resolve13 } from "node:path";
 
 // src/relay-lead.ts
@@ -65703,8 +65713,31 @@ async function runRelayCommand(o2) {
   }
   return void 0;
 }
+var STDIN_RUNNER = Buffer.from(
+  "$s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())); try { & ([ScriptBlock]::Create($s)) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+  "utf16le"
+).toString("base64");
+var runScript = (exec, script, onOutput) => exec(
+  "powershell.exe",
+  [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-EncodedCommand",
+    STDIN_RUNNER
+  ],
+  {
+    onOutput,
+    input: Buffer.from(script.replace(/^#Requires .*\r?\n/gm, ""), "utf8").toString("base64")
+  }
+);
 var systemExec = (file4, args, o2 = {}) => new Promise((res) => {
-  const child = spawn6(file4, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn6(file4, args, {
+    windowsHide: true,
+    stdio: [o2.input === void 0 ? "ignore" : "pipe", "pipe", "pipe"]
+  });
+  if (o2.input !== void 0) child.stdin?.end(o2.input);
   let stdout = "";
   let stderr = "";
   const timer = setTimeout(() => child.kill(), o2.timeoutMs ?? 30 * 6e4);
@@ -65843,28 +65876,17 @@ async function install(o2) {
   o2.stdout(
     "Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.\n"
   );
-  const dir = mkdtempSync4(join62(tmpdir4(), "studio-relay-install-"));
-  const file4 = join62(dir, "install.ps1");
-  writeFileSync21(
-    file4,
+  const r = await runScript(
+    exec,
     o2.script({
       port,
       scope,
       ...o2.values["keep-passwords"] === true ? { keepPasswords: true } : {},
       ...o2.values["disable-spooler"] === true ? { disableSpooler: true } : {},
       ...o2.values["force-stop"] === true ? { forceStop: true } : {}
-    })
+    }),
+    o2.stdout
   );
-  let r;
-  try {
-    r = await exec(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file4],
-      { onOutput: o2.stdout }
-    );
-  } finally {
-    rmSync13(dir, { recursive: true, force: true });
-  }
   if (r.code !== 0) {
     o2.stderr("studio: relay install stopped; fix what it says and run it again (it repairs)\n");
     return 1;
@@ -65952,19 +65974,7 @@ async function uninstall(o2) {
       "No install record here (an install of an earlier version): services Studio stopped stay as they are.\n"
     );
   }
-  const dir = mkdtempSync4(join62(tmpdir4(), "studio-relay-uninstall-"));
-  const file4 = join62(dir, "uninstall.ps1");
-  writeFileSync21(file4, script);
-  let r;
-  try {
-    r = await exec(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file4],
-      { onOutput: o2.stdout }
-    );
-  } finally {
-    rmSync13(dir, { recursive: true, force: true });
-  }
+  const r = await runScript(exec, script, o2.stdout);
   if (r.code !== 0) {
     o2.stderr(
       "studio: relay uninstall stopped; fix what it says and run studio relay uninstall again (it goes on where it stopped)\n"

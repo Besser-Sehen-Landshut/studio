@@ -1,6 +1,6 @@
 // `studio relay uninstall`: the order of its steps, what it puts back, the CLI's refusals, and on
 // the elevated windows-latest job a real run against what an install leaves.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
   existsSync,
@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { CREW_DESCRIPTION, TREE_SOURCE } from '../src/crew-accounts.js';
 import { realPorts } from '../src/ports.js';
-import { type Exec, runRelayCommand } from '../src/relay-command.js';
+import { type Exec, runRelayCommand, runScript, scriptOfRun } from '../src/relay-command.js';
 import { readPairings, writePairings } from '../src/relay-pair.js';
 import {
   type InstallRecord,
@@ -120,6 +120,34 @@ describe('the uninstall script', () => {
     expect(() => relayUninstallScript({ ...base, relayUser: 'a b' })).toThrow(/user name/);
     expect(() => relayUninstallScript({ ...base, crewPrefix: 'x'.repeat(20) })).toThrow(/prefix/);
     expect(() => relayUninstallScript({ ...base, task: "a'b" })).toThrow(/task/);
+  });
+});
+
+describe('what runs elevated, and where its temporary files go', () => {
+  it('the throwaway host key: an admin-only folder made whole beside sshd_config, checked, emptied by name', () => {
+    expect(SSHD_SWAP).toContain("$keyDir = Join-Path $dir ('.studio-sshd-check-'");
+    expect(SSHD_SWAP).toContain('[IO.Directory]::CreateDirectory($keyDir, $acl)');
+    expect(SSHD_SWAP.indexOf('$acl.SetAccessRuleProtection($true, $false)')).toBeLessThan(
+      SSHD_SWAP.indexOf('[IO.Directory]::CreateDirectory($keyDir, $acl)'),
+    );
+    expect(SSHD_SWAP).toContain('is not the admin-only folder this made');
+    expect(SSHD_SWAP).not.toMatch(/-Recurse|\$env:ProgramData|\$env:TEMP/);
+    expect(SSHD_SWAP).toContain("foreach ($f in @('host_ed25519', 'host_ed25519.pub'))");
+  });
+
+  it('install and uninstall hand their script over on stdin, never as a file', async () => {
+    const calls: { args: string[]; input?: string }[] = [];
+    await runScript(
+      async (_f, args, o) => {
+        calls.push({ args, ...(o?.input === undefined ? {} : { input: o.input }) });
+        return { code: 0, stdout: '', stderr: '' };
+      },
+      "#Requires -RunAsAdministrator\nWrite-Output 'ü'\n",
+      () => {},
+    );
+    expect(calls[0]?.args).not.toContain('-File');
+    expect(calls[0]?.args).toContain('-EncodedCommand');
+    expect(scriptOfRun(calls[0])).toBe("Write-Output 'ü'\n");
   });
 });
 
@@ -237,10 +265,10 @@ describe('studio relay uninstall', () => {
     mkdirSync(machine, { recursive: true });
     const scripts: string[] = [];
     const out: string[] = [];
-    const exec: Exec = async (file, args) => {
-      if (file === 'powershell.exe' && args.includes('-File')) {
-        scripts.push(readFileSync(args.at(-1) as string, 'utf8'));
-      }
+    const exec: Exec = async (_file, _args, o) => {
+      // The script goes on stdin, never as a file another process could change first.
+      const script = scriptOfRun(o);
+      if (script !== undefined) scripts.push(script);
       return { code: 0, stdout: 'False', stderr: '' };
     };
     const run = (values: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) =>
@@ -292,6 +320,8 @@ describe('studio relay uninstall', () => {
     expect(script).toContain("$home_ = 'C:\\relay-home'");
     expect(script).toContain("$readPaths = @('C:\\tools')");
     expect(script).not.toContain('[StudioTree]::Remove($p, $null)');
+    // Elevation was checked before: no #Requires reaches the script block.
+    expect(script).not.toMatch(/^#Requires/m);
     expect(s.out.join('')).toContain('remove workers.relay.lab from the owner config');
     // The script removes the pairings itself; the CLI only read them.
     expect(Object.keys(readPairings(s.machine))).toEqual(['lab']);
@@ -365,7 +395,7 @@ describe('studio relay uninstall', () => {
         { 'keep-tree': true },
         {
           exec: async (_f: string, a: string[]) => ({
-            code: a.includes('-File') ? 1 : 0,
+            code: a.includes('-EncodedCommand') ? 1 : 0,
             stdout: 'False',
             stderr: '',
           }),
@@ -516,6 +546,23 @@ New-LocalUser -Name '${other}' -Password $pw -Description 'someone else' | Out-N
     expect(existsSync(join(plain, 'keep.txt'))).toBe(true);
     ps(`Remove-LocalUser -Name '${other}'`);
   }, 300_000);
+
+  it('a script handed over on stdin runs whole, with script scope, and a throw is exit 1', async () => {
+    const exec: Exec = async (file, args, o) => {
+      const r = spawnSync(file, args, { input: o?.input, encoding: 'utf8', env });
+      return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
+    };
+    const ok = await runScript(
+      exec,
+      '#Requires -RunAsAdministrator\n$script:n = 0\nfunction Up { $script:n++ }\nUp; Up\nWrite-Output "n=$($script:n) ü"\n',
+      () => {},
+    );
+    expect(ok.code).toBe(0);
+    expect(ok.stdout).toContain('n=2');
+    const bad = await runScript(exec, "throw 'stopped here'\n", () => {});
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toContain('stopped here');
+  }, 60_000);
 
   it('sshd_config: a config sshd refuses changes nothing; an accepted one is swapped in whole', () => {
     const work = realpathSync(mkdtempSync(join(tmpdir(), 'studio-sshd-swap-')));
