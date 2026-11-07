@@ -453,7 +453,11 @@ describe('the install script', () => {
       }),
     ).toContain('$forceStop = $true');
     for (const s of [
-      "Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'",
+      // Git from Program Files, winget from its package there, the machine's PATH alone.
+      "Need 'Git' { Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'",
+      '& $wg install --id $id --exact --silent --scope machine',
+      "Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe'",
+      "function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') }",
       "Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'",
       'Add-WindowsCapability -Online -Name $ssh.Name',
       '# studio relay begin',

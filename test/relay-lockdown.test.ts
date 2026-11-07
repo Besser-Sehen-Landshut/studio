@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { relayTargetSchema } from '../src/config.js';
+import { relayTargetSchema, workerDenySchema } from '../src/config.js';
 import { crewAccountFunctions, TREE_SOURCE } from '../src/crew-accounts.js';
 import { checkedAddress, ipv4, onLinkBlockList } from '../src/egress-proxy.js';
 import { realPorts } from '../src/ports.js';
@@ -19,14 +19,18 @@ import {
   entrySpan,
   inLocalRange,
   judgeLockdown,
+  judgeLockdownAll,
   LOCKDOWN_GROUP,
   LOCKDOWN_RULE,
   LOCKDOWN_STATE,
   type LockdownState,
+  type LockdownWant,
   lockdownFor,
   lockdownPlan,
+  lockdownPortsRule,
   lockdownProblem,
   lockdownSection,
+  lockdownWant,
   NO_LOCKDOWN,
   PROBE_FIXED,
   parseLockdownState,
@@ -309,6 +313,14 @@ describe('the check before every relay start', () => {
       },
     ],
     routes: [`${ipv4(10, 4, 0, 0)}/16`, `${ipv4(192, 168, 1, 0)}/24`, '2001:db8:1::/64'],
+    ports: (['TCP', 'UDP'] as const).map((protocol) => ({
+      protocol,
+      enabled: 'True',
+      action: 'Block',
+      direction: 'Outbound',
+      users: `D:(A;;CC;;;S-1-5-21-9)(A;;CC;;;${me})`,
+      remote: ['5432', '6000-6010'],
+    })),
     v6: '[fe80::1%12]:445',
     connect: { ...all('10013'), '[fe80::1%12]:445': '10013' },
   });
@@ -336,6 +348,11 @@ describe('the check before every relay start', () => {
     const other = good();
     (other.rules[0] as LockdownState['rules'][number]).users = 'D:(A;;CC;;;S-1-5-21-9)';
     expect(judgeLockdown(other)).toMatch(/does not hold the relay account/);
+    // A longer SID that starts with this one is another account: the ACE's SID must match whole.
+    const longer = good();
+    (longer.rules[0] as LockdownState['rules'][number]).users = `D:(A;;CC;;;${me}0)`;
+    expect(judgeLockdown(longer)).toMatch(/does not hold the relay account/);
+    expect(lockdownSection(lockdownPlan(empty), '@()')).toContain("$who.Contains(';' + $s + ')')");
     expect(
       judgeLockdown({ ...good(), connect: { ...all('10013'), '[fe80::1%12]:445': 'timeout' } }),
     ).toMatch(/\[fe80::1%12\]:445 timed out/);
@@ -346,6 +363,69 @@ describe('the check before every relay start', () => {
     expect(unrefused({ a: 'open' })).toEqual(['a opened']);
   });
 
+  it('holds the start for a deny.prefixes span added to the config after the install', async () => {
+    // Inside the rule's addresses (a part of 10/8): held already.
+    const inside = await lockdownWant({
+      deny: { hosts: [], ports: [], prefixes: [`${ipv4(10, 9, 0, 0)}/16`] },
+    });
+    expect(judgeLockdownAll(good(), inside)).toBeUndefined();
+    const added = await lockdownWant({
+      deny: {
+        hosts: [],
+        ports: [5432],
+        prefixes: [`${ipv4(198, 51, 100, 0)}/24`, '2001:db8:9::/48'],
+      },
+    });
+    const r = judgeLockdownAll(good(), added);
+    expect(r?.kind).toBe('held');
+    expect(r?.line).toMatch(
+      /^deny\.prefixes \S+ has no firewall rule; deny\.prefixes \S+ has no firewall rule: run studio relay install again, elevated/,
+    );
+    expect(r?.line).toContain('2001:db8:9::');
+    // The same through the check as the relay account, from the state the active store gives.
+    const state = async () => ({ code: 0, stdout: JSON.stringify(good()), stderr: '' });
+    expect((await lockdownProblem(state, added))?.line).toBe(r?.line);
+    expect(await lockdownProblem(state, inside)).toBeUndefined();
+  });
+
+  it('holds the start for a deny.ports entry added after the install, for TCP and UDP alike', async () => {
+    const held = await lockdownWant({ deny: { hosts: [], ports: [5432, 6005] } });
+    expect(judgeLockdownAll(good(), held)).toBeUndefined();
+    const added = await lockdownWant({ deny: { hosts: [], ports: [5432, 6379] } });
+    expect(judgeLockdownAll(good(), added)).toEqual({
+      kind: 'held',
+      line: expect.stringMatching(
+        /^deny\.ports 6379 has no TCP firewall rule; deny\.ports 6379 has no UDP firewall rule: run studio relay install again/,
+      ),
+    });
+    // A UDP rule gone, or one bound to another account, holds no port.
+    const noUdp = { ...good(), ports: good().ports.filter((x) => x.protocol === 'TCP') };
+    expect(judgeLockdownAll(noUdp, held)?.line).toMatch(
+      /deny\.ports 5432 has no UDP firewall rule/,
+    );
+    const foreign = good();
+    for (const x of foreign.ports) x.users = 'D:(A;;CC;;;S-1-5-21-9)';
+    expect(judgeLockdownAll(foreign, held)?.line).toMatch(/deny\.ports 5432 has no TCP/);
+  });
+
+  it('holds the start for a deny.hosts address, or a name as it resolves now, outside the rule', async () => {
+    const want = await lockdownWant({
+      deny: { hosts: [ipv4(203, 0, 113, 7), 'nas.example'], ports: [] },
+      lookup: async () => [ipv4(198, 51, 100, 9)],
+    });
+    expect(judgeLockdownAll(good(), want)?.line).toMatch(
+      new RegExp(
+        `deny\\.hosts ${ipv4(203, 0, 113, 7).replace(/\./g, '\\.')}\\S* has no firewall rule; deny\\.hosts ${ipv4(198, 51, 100, 9).replace(/\./g, '\\.')}\\S* has no firewall rule`,
+      ),
+    );
+    // A failing base check refuses first, whatever the config asks.
+    expect(judgeLockdownAll({ ...good(), rules: [] }, want)?.kind).toBe('refused');
+    expect(LOCKDOWN_STATE).toContain('Get-NetFirewallPortFilter');
+    expect(LOCKDOWN_STATE).toContain(`'${lockdownPortsRule('TCP')}'`);
+    expect(LOCKDOWN_STATE).toContain(`'${lockdownPortsRule('UDP')}'`);
+    expect(lockdownSection(lockdownPlan(empty), '@()')).toContain(`'${lockdownPortsRule('UDP')}'`);
+  });
+
   it('reads the state as Windows PowerShell prints it; no answer is a refusal', async () => {
     const one = parseLockdownState({
       me,
@@ -354,7 +434,7 @@ describe('the check before every relay start', () => {
         enabled: 'True',
         action: 'Block',
         direction: 'Outbound',
-        users: me,
+        users: `D:(A;;CC;;;${me})`,
         remote: `${ipv4(10, 0, 0, 0)}/8`,
       },
       routes: `${ipv4(10, 4, 0, 0)}/16`,
@@ -364,9 +444,9 @@ describe('the check before every relay start', () => {
     expect(one?.profiles).toHaveLength(1);
     expect(one?.rules[0]?.remote).toEqual([`${ipv4(10, 0, 0, 0)}/8`]);
     expect(judgeLockdown(one as LockdownState)).toBeUndefined();
-    expect(await lockdownProblem(async () => ({ code: 1, stdout: '', stderr: '' }))).toMatch(
-      /cannot be checked/,
-    );
+    expect(
+      (await lockdownProblem(async () => ({ code: 1, stdout: '', stderr: '' })))?.line,
+    ).toMatch(/cannot be checked/);
     expect(
       await lockdownProblem(async () => ({ code: 0, stdout: JSON.stringify(good()), stderr: '' })),
     ).toBeUndefined();
@@ -441,7 +521,11 @@ describe('the checks of a relay start (relayWindows.check)', () => {
   };
   const windows = (
     m: string,
-    o: { lookup?: (n: string) => Promise<string[]>; smb?: Record<string, number> } = {},
+    o: {
+      lookup?: (n: string) => Promise<string[]>;
+      smb?: Record<string, number>;
+      lockdown?: Parameters<typeof relayWindows>[0]['lockdown'];
+    } = {},
   ) =>
     relayWindows({
       prefix: 'studio-crew',
@@ -459,7 +543,7 @@ describe('the checks of a relay start (relayWindows.check)', () => {
       startProxy: async () => ({ port: 1, close: async () => {} }),
       run,
       interfaces: () => ({}),
-      lockdown: async () => undefined,
+      lockdown: o.lockdown ?? (async () => undefined),
       lookup: o.lookup ?? (async () => [ipv4(198, 51, 100, 9)]),
       smbAsMe: async () => o.smb ?? {},
     });
@@ -479,6 +563,29 @@ describe('the checks of a relay start (relayWindows.check)', () => {
     expect(r.problem).toEqual({
       kind: 'held',
       line: `deny.hosts nas.example now resolves to ${ipv4(203, 0, 113, 50)}, which no firewall rule holds: run studio relay install again, elevated, so the firewall rules follow the names`,
+    });
+  });
+
+  it('hands the check every deny entry in force, prefixes and ports added later included; a gap holds the start', async () => {
+    const m = machine({ firewall: true, lockdownNames: {} });
+    let seen: LockdownWant | undefined;
+    const r = await windows(m, {
+      lockdown: async (_run, want) => {
+        seen = want;
+        return {
+          kind: 'held',
+          line: 'deny.ports 6379 has no TCP firewall rule: run studio relay install again',
+        };
+      },
+    }).check({
+      deny: { ...deny, ports: [6379], prefixes: [`${ipv4(198, 51, 100, 0)}/24`] },
+      hosts: [],
+    });
+    expect(seen?.ports).toEqual([6379]);
+    expect(seen?.spans.map((x) => x.from)).toEqual(['deny.prefixes']);
+    expect(r.problem).toEqual({
+      kind: 'held',
+      line: 'deny.ports 6379 has no TCP firewall rule: run studio relay install again',
     });
   });
 
@@ -556,6 +663,22 @@ describe('a worker without its lockdown, as the lead sees it', () => {
     expect(yes.ok).toBe(true);
     expect(yes.lines.join('\n')).toContain('note: no network lockdown');
   });
+  it('deny.prefixes: further networks of either family become part of the rule; nonsense is refused', () => {
+    const p = lockdownPlan({
+      ...empty,
+      denyPrefixes: ['2001:db8:ab00::/56', `${ipv4(203, 0, 113, 0)}/24`],
+    });
+    expect(p.hosts).toEqual([
+      '2001:db8:ab00:0:0:0:0:0-2001:db8:ab00:ff:ffff:ffff:ffff:ffff',
+      `${ipv4(203, 0, 113, 0)}-${ipv4(203, 0, 113, 255)}`,
+    ]);
+    const deny = (prefixes: string[]) => workerDenySchema.safeParse({ prefixes }).success;
+    expect(deny(['2001:db8::/56', `${ipv4(203, 0, 113, 0)}/24`])).toBe(true);
+    expect(deny(['2001:db8::/129'])).toBe(false);
+    expect(deny(['nas.example/24'])).toBe(false);
+    expect(deny([`${ipv4(203, 0, 113, 0)}`])).toBe(false);
+  });
+
   it('the lead config takes accept_no_firewall, off by default', () => {
     const base = {
       host: 'worker.example',
@@ -659,7 +782,7 @@ Write-Output ('left users: ' + @(Get-LocalUser | Where-Object { $_.Name -like '$
     expect(out).toContain('left users: 0');
   }, 300_000);
 
-  it('the check as this account: the real rule with the routes of this machine holds; without it, it refuses', async () => {
+  it('the check as this account: the real rules with the routes of this machine hold; without them, or for an entry added later, the start waits', async () => {
     const me = execFileSync(
       'powershell.exe',
       [
@@ -670,15 +793,36 @@ Write-Output ('left users: ' + @(Get-LocalUser | Where-Object { $_.Name -like '$
       ],
       { encoding: 'utf8', env },
     ).trim();
-    expect(await lockdownProblem(runFile)).toMatch(/not in the active firewall policy/);
+    expect((await lockdownProblem(runFile))?.line).toMatch(/not in the active firewall policy/);
     // The real rule, bound to this account, for the length of the test.
     runPs(`$ErrorActionPreference = 'Stop'
-${lockdownSection(lockdownPlan(empty), `@('${me}')`)
+${lockdownSection(
+  lockdownPlan({ denyHosts: [], denyPorts: [5432], denyPrefixes: [`${ipv4(198, 51, 100, 0)}/24`] }),
+  `@('${me}')`,
+)
   .split('\n')
   .filter((l) => !/^(LockdownProbe|\$lockProblems|if \(@\(\$lockProblems)/.test(l))
   .join('\n')}`);
     try {
       expect(await lockdownProblem(runFile)).toBeUndefined();
+      // What the install wrote, read back from the active store: held.
+      const installed = await lockdownWant({
+        deny: { hosts: [], ports: [5432], prefixes: [`${ipv4(198, 51, 100, 0)}/24`] },
+      });
+      expect(await lockdownProblem(runFile, installed)).toBeUndefined();
+      // A prefix and a port added to the config after the install: the start waits.
+      const later = await lockdownWant({
+        deny: {
+          hosts: [],
+          ports: [5432, 6379],
+          prefixes: [`${ipv4(198, 51, 100, 0)}/24`, `${ipv4(203, 0, 113, 0)}/24`],
+        },
+      });
+      const r = await lockdownProblem(runFile, later);
+      expect(r?.kind).toBe('held');
+      expect(r?.line).toMatch(
+        /^deny\.prefixes \S+ has no firewall rule; deny\.ports 6379 has no TCP firewall rule; deny\.ports 6379 has no UDP firewall rule: run studio relay install again/,
+      );
     } finally {
       runPs(
         `Get-NetFirewallRule -Group '${LOCKDOWN_GROUP}' -ErrorAction SilentlyContinue | Remove-NetFirewallRule`,

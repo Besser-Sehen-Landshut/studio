@@ -11,7 +11,14 @@ import { LOOPBACK } from './egress-proxy.js';
 import { HeldError } from './held.js';
 import type { Ports } from './ports.js';
 import { localSubnets, ownAddresses, smbCandidates, smbProblem } from './relay-hosts.js';
-import { denyNameDrift, lockdownProblem, NO_LOCKDOWN, smbCodesAsMe } from './relay-lockdown.js';
+import {
+  denyNameDrift,
+  type LockdownWant,
+  lockdownProblem,
+  lockdownWant,
+  NO_LOCKDOWN,
+  smbCodesAsMe,
+} from './relay-lockdown.js';
 import type { RelayWindows } from './relay-serve.js';
 import { readInstallRecord } from './relay-uninstall.js';
 import {
@@ -99,7 +106,10 @@ export function relayWindows(o: {
   spawn?: SpawnKeeper;
   interfaces?: () => ReturnType<typeof networkInterfaces>;
   /** Seam for tests: the lockdown check as the relay account. */
-  lockdown?: (run: RunFile) => Promise<string | undefined>;
+  lockdown?: (
+    run: RunFile,
+    want: LockdownWant,
+  ) => Promise<{ kind: 'held' | 'refused'; line: string } | undefined>;
   /** Seam for tests: name resolution of deny.hosts. */
   lookup?: (name: string) => Promise<string[]>;
   /** Seam for tests: the SMB check as the relay account. */
@@ -157,9 +167,15 @@ export function relayWindows(o: {
         warnings.push(NO_LOCKDOWN);
       } else {
         // The rule in the active policy, every profile on, every local prefix inside the rule, and
-        // the firewall's own refusal from the fixed targets and an IPv6 one.
-        const lock = await (o.lockdown ?? lockdownProblem)(run);
-        if (lock !== undefined) return { problem: { kind: 'refused', line: lock }, warnings };
+        // the firewall's own refusal from the fixed targets and an IPv6 one; then every deny entry
+        // of the config in force (prefixes, hosts as they resolve now, ports) inside the active
+        // rules: one added after the install holds the start.
+        const want = await lockdownWant({
+          deny: { hosts, ports: deny.ports, prefixes: deny.prefixes ?? [] },
+          ...(o.lookup === undefined ? {} : { lookup: o.lookup }),
+        });
+        const lock = await (o.lockdown ?? lockdownProblem)(run, want);
+        if (lock !== undefined) return { problem: lock, warnings };
         // Every name of deny.hosts resolved anew: one past its rule holds the start.
         const drift = await denyNameDrift({
           denyHosts: hosts,

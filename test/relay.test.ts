@@ -760,8 +760,9 @@ describe('the Windows relay worker, with fakes', () => {
       expect(line, line).toContain('/L');
     }
     // Node.js and Studio run from admin-only copies; no junction of the source comes along.
+    expect(script).toContain("$nodeSource = 'C:\\nodejs\\node.exe'");
     expect(script).toContain(
-      `'C:\\nodejs\\node.exe' -Destination 'C:\\Program Files\\Studio\\relay\\node\\node.exe'`,
+      "Copy-Item -LiteralPath $nodeSource -Destination 'C:\\Program Files\\Studio\\relay\\node\\node.exe'",
     );
     expect(script).toMatch(/robocopy\.exe .* \/MIR \/XJ /);
     // The broker has no script file: its action carries it, encoded.
