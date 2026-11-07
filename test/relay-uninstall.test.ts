@@ -412,7 +412,9 @@ New-Item -ItemType Junction -Path ${q(join(home, 'state', 'link'))} -Target ${q(
       grant: false,
     });
     const cfg = join(work, 'rights.inf');
-    ps(`secedit /export /cfg ${q(cfg)} /areas USER_RIGHTS | Out-Null`);
+    ps(
+      `for ($k = 0; $k -lt 5 -and -not (Test-Path -LiteralPath ${q(cfg)}); $k++) { secedit /export /cfg ${q(cfg)} /areas USER_RIGHTS | Out-Null; if (-not (Test-Path -LiteralPath ${q(cfg)})) { Start-Sleep -Seconds 2 } }`,
+    );
     expect(readFileSync(cfg, 'utf16le')).not.toContain(groupSid);
     expect(existsSync(machine)).toBe(false);
     expect(existsSync(home)).toBe(false);
