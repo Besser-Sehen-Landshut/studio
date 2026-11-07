@@ -68,8 +68,8 @@ describe('the bootstrap template', () => {
   it('checks the SHA-256 before it unpacks or runs anything, and asks before winget', () => {
     const check = template.indexOf('if ($got -ne $sha256)');
     expect(check).toBeGreaterThan(0);
-    expect(template.indexOf('Expand-Archive')).toBeGreaterThan(check);
-    expect(template.indexOf('& node $studio')).toBeGreaterThan(check);
+    expect(template.indexOf('New-Object IO.Compression.ZipArchive($fs')).toBeGreaterThan(check);
+    expect(template.indexOf('& $nodeExe $studio')).toBeGreaterThan(check);
     expect(template.indexOf('Read-Host')).toBeLessThan(
       template.indexOf('winget install --id $id --exact --silent'),
     );
@@ -77,6 +77,26 @@ describe('the bootstrap template', () => {
     expect(template).toContain('$env:SSH_CONNECTION');
     expect(template).toContain("$x.Name -like 'sshd*'");
     expect(template).toContain("'relay', 'install', '--pair', $Pair");
+  });
+
+  it('stages in an admin-only folder made before the download, never in TEMP, and holds the bundle from hash to unpack', () => {
+    expect(template).not.toMatch(/\$env:TEMP|\$env:TMP/i);
+    const made = template.indexOf('[IO.Directory]::CreateDirectory($work, $acl)');
+    expect(made).toBeGreaterThan(template.indexOf('$acl.SetAccessRuleProtection($true, $false)'));
+    expect(made).toBeLessThan(template.indexOf('Invoke-WebRequest'));
+    expect(made).toBeLessThan(template.indexOf('Copy-Item -LiteralPath $Bundle'));
+    expect(template).toContain("$work = Join-Path $env:ProgramData ('studio-bootstrap-'");
+    // Read sharing only, one handle for the hash and the unpacking, closed only after both.
+    const open = template.indexOf('[IO.FileShare]::Read)');
+    expect(open).toBeGreaterThan(0);
+    expect(template.indexOf('ComputeHash($fs)')).toBeGreaterThan(open);
+    expect(template.indexOf('$fs.Dispose()')).toBeGreaterThan(template.indexOf('$in.CopyTo($out)'));
+    expect(template).toContain('names a path outside its folder');
+    // Node.js and Git from Program Files, PATH from the machine only; the staging folder goes.
+    expect(template).toContain("$nodeExe = Join-Path $env:ProgramFiles 'nodejs\\node.exe'");
+    expect(template).toContain("[Environment]::GetEnvironmentVariable('Path', 'Machine') }");
+    expect(template).not.toContain("GetEnvironmentVariable('Path', 'User')");
+    expect(template).toContain('Remove-Item -LiteralPath $work -Recurse -Force');
   });
 });
 
@@ -200,7 +220,7 @@ describe.skipIf(!elevated || assets === undefined)('the bootstrap on Windows', (
   it('a dry run names every step and changes nothing', () => {
     const r = run(['-Pair', pair, '-DryRun', '--source', 'fd7a::/48']);
     expect(r.out).toContain('[1/4] Node.js and Git for Windows');
-    expect(r.out).toMatch(/ok: Node\.js \d+/);
+    expect(r.out).toMatch(/(ok|would install): Node\.js/);
     expect(r.out).toContain(
       `would download https://github.com/owner/name/releases/download/v${a.version}/studio-${a.version}.zip`,
     );
