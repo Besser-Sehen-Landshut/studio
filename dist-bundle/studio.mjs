@@ -29344,7 +29344,7 @@ function migrationNumberOf(entry, pattern) {
 var import_yaml2 = __toESM(require_dist(), 1);
 import { existsSync, lstatSync, readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
 import { join as join2 } from "node:path";
-var STUDIO_VERSION = "0.26.1";
+var STUDIO_VERSION = "0.27.0";
 var STUDIO_REPOSITORY = "Besser-Sehen-Landshut/studio";
 var HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;

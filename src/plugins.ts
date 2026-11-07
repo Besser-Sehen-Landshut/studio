@@ -4,7 +4,7 @@ import { isAlias, isMap, isScalar, parseDocument, visit, type YAMLMap } from 'ya
 import { z } from 'zod';
 
 /** This plugin's own version; a test keeps it equal to package.json and plugin.json. */
-export const STUDIO_VERSION = '0.26.1';
+export const STUDIO_VERSION = '0.27.0';
 /** The repository Studio is released from (its releases carry the relay worker's bootstrap). */
 export const STUDIO_REPOSITORY = 'Besser-Sehen-Landshut/studio';
 
