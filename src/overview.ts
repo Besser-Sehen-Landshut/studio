@@ -27,7 +27,8 @@ const line = (e: unknown): string =>
 export const INCONSISTENT_ROOT =
   'inconsistent state root: its marker names a project whose state root is another one';
 
-function markerProject(root: string): string | undefined {
+/** The project a state root's marker names; undefined without a marker. */
+export function markerProject(root: string): string | undefined {
   const file = join(root, 'marker.json');
   try {
     if (!lstatSync(file).isFile()) throw new Error(`${file} is not a plain file`);

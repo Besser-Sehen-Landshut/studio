@@ -35,6 +35,7 @@ import {
   SEGMENT_RE,
   treeDigest,
 } from '../src/relay-bootstrap.js';
+import { renderPairLine } from '../src/relay-pair.js';
 import { powershellEnv } from '../src/windows-sandbox.js';
 
 const repoRoot = join(import.meta.dirname, '..');
@@ -156,12 +157,14 @@ describe('the bootstrap template', () => {
       template.indexOf('ComputeHash($fs)'),
     );
     expect(template.indexOf('$fs.Dispose()')).toBeGreaterThan(template.indexOf('$in.CopyTo($out)'));
-    expect(template).toContain("$nodeExe = Join-Path $env:ProgramFiles 'nodejs\\node.exe'");
+    expect(template).toContain("$nodeExe = Join-Path $programFiles 'nodejs\\node.exe'");
+    expect(template).toContain("$programFiles = [Environment]::GetFolderPath('ProgramFiles')");
+    expect(template).not.toMatch(/\$env:(ProgramFiles|ProgramData|SystemRoot|windir)/i);
     expect(template).not.toContain("GetEnvironmentVariable('Path', 'User')");
     expect(template).toContain('[IO.Directory]::Delete($work, $true)');
     expect(template).not.toMatch(/-Recurse/);
     expect(template.indexOf('Read-Host')).toBeLessThan(
-      template.indexOf('winget install --id $id --exact --silent'),
+      template.indexOf('& $wg install --id $id --exact --silent'),
     );
     expect(template).toContain("$x.Name -like 'sshd*'");
   });
@@ -225,7 +228,7 @@ describe('the release assets and the lead agree, from separate sources', () => {
 describe('the line the lead prints', () => {
   const anchor = { bootstrapSha: 'A'.repeat(64), tree: 'b'.repeat(64) };
   it('checks the bootstrap by SHA-256 before it runs it, and hands it the tree digest', () => {
-    const c = bootstrapCommand({ pair: 'studio-pair-1 lab x ssh-ed25519 AAAA' }, anchor);
+    const c = bootstrapCommand({ pair: 'studio-pair-2 lab x ssh-ed25519 AAAA' }, anchor);
     expect(c).toContain(
       `(Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/${STUDIO_REPOSITORY}/releases/download/v${STUDIO_VERSION}/studio-relay-bootstrap.ps1').RawContentStream.ToArray()`,
     );
@@ -235,7 +238,7 @@ describe('the line the lead prints', () => {
       `[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-', '') -ne '${anchor.bootstrapSha}'`,
     );
     expect(c.indexOf('ComputeHash($b)')).toBeLessThan(c.indexOf('[ScriptBlock]::Create'));
-    expect(c).toContain(`-Pair 'studio-pair-1 lab x ssh-ed25519 AAAA' -Tree '${anchor.tree}'`);
+    expect(c).toContain(`-Pair 'studio-pair-2 lab x ssh-ed25519 AAAA' -Tree '${anchor.tree}'`);
     expect(bootstrapCommand({ uninstall: true }, anchor)).toContain(
       `-Uninstall -Tree '${anchor.tree}'`,
     );
@@ -286,7 +289,12 @@ describe.skipIf(!elevated)('the one-liner and the bootstrap on Windows', () => {
       return { code: x.status, out: `${x.stdout}${x.stderr}` };
     }
   };
-  const pair = `studio-pair-1 lab ${'a'.repeat(43)} ssh-ed25519 ${'A'.repeat(68)}`;
+  const pair = renderPairLine({
+    label: 'lab',
+    secret: 'a'.repeat(43),
+    key: `ssh-ed25519 ${'A'.repeat(68)}`,
+    deny: { hosts: ['nas.example'], ports: [5432], prefixes: [] },
+  });
 
   it('the one-liner runs the downloaded script only when its SHA-256 is the expected one, upper or lower case', async () => {
     const text =

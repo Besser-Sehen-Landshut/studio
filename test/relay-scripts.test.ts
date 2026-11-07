@@ -101,7 +101,7 @@ const GLUED =
 
 describe('elevated runs start nothing from the cwd or a user folder', () => {
   it('system tools by absolute path on Windows; as named elsewhere and for anything else', () => {
-    const env = { SystemRoot: 'C:\\Windows' };
+    const env = () => 'C:\\Windows';
     expect(systemTool('powershell.exe', env, 'win32')).toBe(
       'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     );

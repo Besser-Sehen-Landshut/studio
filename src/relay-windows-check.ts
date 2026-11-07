@@ -13,6 +13,7 @@ import type { Ports } from './ports.js';
 import { localSubnets, ownAddresses, smbCandidates, smbProblem } from './relay-hosts.js';
 import {
   denyNameDrift,
+  gapFix,
   type LockdownWant,
   lockdownProblem,
   lockdownWant,
@@ -145,7 +146,7 @@ export function relayWindows(o: {
       ...(o.spawn === undefined ? {} : { spawn: o.spawn }),
     });
   return {
-    async check({ deny, hosts }) {
+    async check({ deny, hosts, lead }) {
       const warnings: string[] = [];
       const admin = await elevated(run);
       if (admin !== false) {
@@ -173,6 +174,7 @@ export function relayWindows(o: {
         const want = await lockdownWant({
           deny: { hosts, ports: deny.ports, prefixes: deny.prefixes ?? [] },
           ...(o.lookup === undefined ? {} : { lookup: o.lookup }),
+          ...(lead === undefined ? {} : { lead }),
         });
         const lock = await (o.lockdown ?? lockdownProblem)(run, want);
         if (lock !== undefined) return { problem: lock, warnings };
@@ -186,7 +188,7 @@ export function relayWindows(o: {
           return {
             problem: {
               kind: 'held',
-              line: `${drift.join('; ')}: run studio relay install again, elevated, so the firewall rules follow the names`,
+              line: `${drift.join('; ')}: ${gapFix(lead)}`,
             },
             warnings,
           };

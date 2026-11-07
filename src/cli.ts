@@ -714,10 +714,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       values['keep-tree'],
       values['force-path'],
       values['block-smb-lan'],
+      values['update-deny'],
     ];
     if (relayOnly.some((v) => v !== undefined) && cmd !== 'relay') {
       throw new UsageError(
-        '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop, --keep-tree, --force-path and --block-smb-lan work with relay only',
+        '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop, --keep-tree, --force-path, --block-smb-lan and --update-deny work with relay only',
       );
     }
     if (values['no-firewall'] !== undefined && cmd !== 'relay' && cmd !== 'worker') {
@@ -5491,6 +5492,7 @@ function parseCli(argv: string[]) {
         'no-firewall': { type: 'boolean' },
         'force-path': { type: 'boolean' },
         'block-smb-lan': { type: 'boolean' },
+        'update-deny': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,

@@ -461,6 +461,16 @@ const strings: Strings = {
     pairHasStudio: (command) => `With Studio there already: ${command}`,
     pairThen: (command) => `Then here: ${command}`,
     pairSecret: 'The line holds a single-use secret: paste it on the worker only.',
+    pairDeny: (set) =>
+      `It carries the deny list of your projects for this worker (${set}); the worker blocks it in its firewall.`,
+    pairDenyProblem: (problem) => `note: ${problem} (its deny list is not in the line)`,
+    updateDenyPc:
+      'On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH), within a day:',
+    updateDenyWhat: (set) =>
+      `It adds the deny list of your projects (${set}) to workers.serve.deny of the worker and writes its firewall rules anew; it removes nothing and pairs nothing.`,
+    denyUpdated: (added, rules) =>
+      `Done. workers.serve.deny: ${added === 'nothing' ? 'nothing new' : `added ${added}`}${rules ? '; the firewall rules hold it' : ' (no lockdown here: --no-firewall)'}. Relay starts go on.`,
+    installDenyAdded: (added) => `workers.serve.deny: added ${added} from the pairing line`,
     paired: (label, where, studio, platform, fp) =>
       `paired: ${label} is ${where}, Studio ${studio} on ${platform}, host key pinned (${fp}).`,
     installWebClient:

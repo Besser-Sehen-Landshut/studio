@@ -713,7 +713,7 @@ foreach ($p in $readPaths) {
  * `.git` another user planted above a folder (CVE-2022-24765), and crews of other users work on
  * this machine.
  */
-export const GIT_MIN_CHECK = String.raw`$gitExe = Join-Path $env:ProgramFiles 'Git\cmd\git.exe'
+export const GIT_MIN_CHECK = String.raw`$gitExe = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Git\cmd\git.exe'
 if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) { throw 'Git for Windows is not installed for all users: install 2.35.2 or later (winget install --id Git.Git --exact --scope machine)' }
 $gitVersion = [string](& $gitExe --version)
 if ($gitVersion -notmatch '(\d+)\.(\d+)\.(\d+)') { throw "cannot read the version of Git: $gitVersion" }

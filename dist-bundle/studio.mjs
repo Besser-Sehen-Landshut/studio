@@ -53,10 +53,10 @@ var require_identity = __commonJS({
     var NODE_TYPE = /* @__PURE__ */ Symbol.for("yaml.node.type");
     var isAlias2 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === ALIAS;
     var isDocument = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === DOC;
-    var isMap6 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === MAP;
+    var isMap7 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === MAP;
     var isPair = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === PAIR;
     var isScalar3 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SCALAR;
-    var isSeq3 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SEQ;
+    var isSeq4 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SEQ;
     function isCollection(node2) {
       if (node2 && typeof node2 === "object")
         switch (node2[NODE_TYPE]) {
@@ -89,11 +89,11 @@ var require_identity = __commonJS({
     exports.isAlias = isAlias2;
     exports.isCollection = isCollection;
     exports.isDocument = isDocument;
-    exports.isMap = isMap6;
+    exports.isMap = isMap7;
     exports.isNode = isNode;
     exports.isPair = isPair;
     exports.isScalar = isScalar3;
-    exports.isSeq = isSeq3;
+    exports.isSeq = isSeq4;
   }
 });
 
@@ -4201,9 +4201,9 @@ var require_resolve_flow_collection = __commonJS({
     var blockMsg = "Block collections are not allowed within flow collections";
     var isBlock = (token) => token && (token.type === "block-map" || token.type === "block-seq");
     function resolveFlowCollection({ composeNode, composeEmptyNode }, ctx, fc, onError, tag) {
-      const isMap6 = fc.start.source === "{";
-      const fcName = isMap6 ? "flow map" : "flow sequence";
-      const NodeClass = tag?.nodeClass ?? (isMap6 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
+      const isMap7 = fc.start.source === "{";
+      const fcName = isMap7 ? "flow map" : "flow sequence";
+      const NodeClass = tag?.nodeClass ?? (isMap7 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
       const coll = new NodeClass(ctx.schema);
       coll.flow = true;
       const atRoot = ctx.atRoot;
@@ -4239,7 +4239,7 @@ var require_resolve_flow_collection = __commonJS({
             offset = props.end;
             continue;
           }
-          if (!isMap6 && ctx.options.strict && utilContainsNewline.containsNewline(key))
+          if (!isMap7 && ctx.options.strict && utilContainsNewline.containsNewline(key))
             onError(
               key,
               // checked by containsNewline()
@@ -4279,7 +4279,7 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap6 && !sep9 && !props.found) {
+        if (!isMap7 && !sep9 && !props.found) {
           const valueNode = value2 ? composeNode(ctx, value2, props, onError) : composeEmptyNode(ctx, props.end, sep9, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
@@ -4302,7 +4302,7 @@ var require_resolve_flow_collection = __commonJS({
             startOnNewline: false
           });
           if (valueProps.found) {
-            if (!isMap6 && !props.found && ctx.options.strict) {
+            if (!isMap7 && !props.found && ctx.options.strict) {
               if (sep9)
                 for (const st of sep9) {
                   if (st === valueProps.found)
@@ -4334,7 +4334,7 @@ var require_resolve_flow_collection = __commonJS({
           const pair = new Pair.Pair(keyNode, valueNode);
           if (ctx.options.keepSourceTokens)
             pair.srcToken = collItem;
-          if (isMap6) {
+          if (isMap7) {
             const map2 = coll;
             if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
               onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
@@ -4350,7 +4350,7 @@ var require_resolve_flow_collection = __commonJS({
           offset = valueNode ? valueNode.range[2] : valueProps.end;
         }
       }
-      const expectedEnd = isMap6 ? "}" : "]";
+      const expectedEnd = isMap7 ? "}" : "]";
       const [ce, ...ee] = fc.end;
       let cePos = offset;
       if (ce?.source === expectedEnd)
@@ -7251,7 +7251,7 @@ var require_public_api = __commonJS({
         return docs;
       return Object.assign([], { empty: true }, composer$1.streamInfo());
     }
-    function parseDocument7(source, options = {}) {
+    function parseDocument8(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7277,7 +7277,7 @@ var require_public_api = __commonJS({
       } else if (options === void 0 && reviver && typeof reviver === "object") {
         options = reviver;
       }
-      const doc = parseDocument7(src, options);
+      const doc = parseDocument8(src, options);
       if (!doc)
         return null;
       doc.warnings.forEach((warning) => log2.warn(doc.options.logLevel, warning));
@@ -7313,7 +7313,7 @@ var require_public_api = __commonJS({
     }
     exports.parse = parse4;
     exports.parseAllDocuments = parseAllDocuments2;
-    exports.parseDocument = parseDocument7;
+    exports.parseDocument = parseDocument8;
     exports.stringify = stringify3;
   }
 });
@@ -7846,9 +7846,9 @@ import { homedir as homedir16 } from "node:os";
 import { fileURLToPath as fileURLToPath9 } from "node:url";
 
 // src/cli.ts
-import { existsSync as existsSync21, readFileSync as readFileSync60 } from "node:fs";
+import { existsSync as existsSync22, readFileSync as readFileSync61 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
-import { dirname as dirname23, join as join67, resolve as resolve17 } from "node:path";
+import { dirname as dirname24, join as join67, resolve as resolve17 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/acceptance.ts
@@ -28722,6 +28722,12 @@ var de_default2 = defineLocale({
       pairHasStudio: (command) => `Ist Studio dort schon installiert: ${command}`,
       pairThen: (command) => `Danach hier: ${command}`,
       pairSecret: "Die Zeile enth\xE4lt ein Einmal-Geheimnis: nur auf dem Worker einf\xFCgen.",
+      pairDeny: (set2) => `Sie tr\xE4gt die Sperrliste der Projekte f\xFCr diesen Worker (${set2}); der Worker sperrt sie in seiner Firewall.`,
+      pairDenyProblem: (problem) => `Hinweis: ${problem} (seine Sperrliste ist nicht in der Zeile)`,
+      updateDenyPc: "Auf dem Windows-PC, in einer PowerShell als Administrator (am PC oder per Remotedesktop, nie per SSH), innerhalb eines Tages:",
+      updateDenyWhat: (set2) => `Sie erg\xE4nzt die Sperrliste der Projekte (${set2}) in workers.serve.deny des Workers und schreibt seine Firewall-Regeln neu; sie entfernt nichts und koppelt nichts.`,
+      denyUpdated: (added, rules) => `Fertig. workers.serve.deny: ${added === "nothing" ? "nichts Neues" : `erg\xE4nzt um ${added}`}${rules ? "; die Firewall-Regeln halten es" : " (keine Sperre hier: --no-firewall)"}. Relay-Starts gehen weiter.`,
+      installDenyAdded: (added) => `workers.serve.deny: ${added} aus der Kopplungszeile erg\xE4nzt`,
       paired: (label, where, studio, platform2, fp) => `gekoppelt: ${label} ist ${where}, Studio ${studio} auf ${platform2}, Host-Schl\xFCssel festgelegt (${fp}).`,
       installWebClient: "Studio relay install: stoppt und deaktiviert den Dienst WebClient (WebDAV), den die Crew-Sandbox nicht h\xE4lt.",
       installStopped: "studio: relay install angehalten; beheben, was es sagt, und erneut ausf\xFChren (es repariert)",
@@ -29171,6 +29177,12 @@ var strings = {
     pairHasStudio: (command) => `With Studio there already: ${command}`,
     pairThen: (command) => `Then here: ${command}`,
     pairSecret: "The line holds a single-use secret: paste it on the worker only.",
+    pairDeny: (set2) => `It carries the deny list of your projects for this worker (${set2}); the worker blocks it in its firewall.`,
+    pairDenyProblem: (problem) => `note: ${problem} (its deny list is not in the line)`,
+    updateDenyPc: "On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH), within a day:",
+    updateDenyWhat: (set2) => `It adds the deny list of your projects (${set2}) to workers.serve.deny of the worker and writes its firewall rules anew; it removes nothing and pairs nothing.`,
+    denyUpdated: (added, rules) => `Done. workers.serve.deny: ${added === "nothing" ? "nothing new" : `added ${added}`}${rules ? "; the firewall rules hold it" : " (no lockdown here: --no-firewall)"}. Relay starts go on.`,
+    installDenyAdded: (added) => `workers.serve.deny: added ${added} from the pairing line`,
     paired: (label, where, studio, platform2, fp) => `paired: ${label} is ${where}, Studio ${studio} on ${platform2}, host key pinned (${fp}).`,
     installWebClient: "Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.",
     installStopped: "studio: relay install stopped; fix what it says and run it again (it repairs)",
@@ -40505,7 +40517,7 @@ foreach ($p in $readPaths) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }
 `;
-var GIT_MIN_CHECK = String.raw`$gitExe = Join-Path $env:ProgramFiles 'Git\cmd\git.exe'
+var GIT_MIN_CHECK = String.raw`$gitExe = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Git\cmd\git.exe'
 if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) { throw 'Git for Windows is not installed for all users: install 2.35.2 or later (winget install --id Git.Git --exact --scope machine)' }
 $gitVersion = [string](& $gitExe --version)
 if ($gitVersion -notmatch '(\d+)\.(\d+)\.(\d+)') { throw "cannot read the version of Git: $gitVersion" }
@@ -41302,7 +41314,7 @@ function ConnectAs([string]$name, [string]$sid, [string]$plain, [string[]]$targe
   foreach ($r in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @($sid, 'ReadAndExecute'))) {
     $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($r[0])), $r[1], 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
   }
-  $dir = Join-Path $env:ProgramData ('studio-probe-' + [Guid]::NewGuid().ToString('N'))
+  $dir = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('studio-probe-' + [Guid]::NewGuid().ToString('N'))
   $null = [IO.Directory]::CreateDirectory($dir, $acl)
   $file = Join-Path $dir 'probe.ps1'
   $out = Join-Path $dir 'out.json'
@@ -41312,8 +41324,8 @@ function ConnectAs([string]$name, [string]$sid, [string]$plain, [string[]]$targe
     [IO.File]::WriteAllText($file, $script, (New-Object Text.ASCIIEncoding))
     $secure = ConvertTo-SecureString $plain -AsPlainText -Force
     $c = New-Object System.Management.Automation.PSCredential ("$env:COMPUTERNAME\\$name", $secure)
-    $ps = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $file + '"')) -Credential $c -WorkingDirectory $env:SystemRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    $ps = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $file + '"')) -Credential $c -WorkingDirectory ([Environment]::GetFolderPath('Windows')) -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'the probe as the throwaway user did not finish' }
     $raw = Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue
     if (-not $raw) { throw "the probe as the throwaway user gave no answer: $(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)" }
@@ -41405,7 +41417,8 @@ async function lockdownWant(o2) {
       ...(o2.deny.prefixes ?? []).map((entry) => ({ entry, from: "deny.prefixes" })),
       ...plan.hosts.filter((h2) => !fromPrefix.has(h2)).map((entry) => ({ entry, from: "deny.hosts" }))
     ],
-    ports: plan.ports
+    ports: plan.ports,
+    ...o2.lead === void 0 ? {} : { lead: o2.lead }
   };
 }
 var asList = (x) => Array.isArray(x) ? x : x === void 0 || x === null ? [] : [x];
@@ -41480,12 +41493,12 @@ function lockdownGaps(s, want) {
   }
   return gaps;
 }
-var GAP_FIX = "run studio relay install again, elevated, so the firewall rules follow the config (an entry from a repository goes into workers.serve.deny of this worker first)";
+var gapFix = (lead = "<label>") => `on the lead, run studio relay pair ${lead} --update-deny and paste the line it prints in an elevated PowerShell on this PC (it adds the entry to workers.serve.deny and writes the firewall rules anew)`;
 function judgeLockdownAll(s, want) {
   const base2 = judgeLockdownBase(s);
   if (base2 !== void 0) return { kind: "refused", line: base2 };
   const gaps = want === void 0 ? [] : lockdownGaps(s, want);
-  return gaps.length === 0 ? void 0 : { kind: "held", line: `${gaps.join("; ")}: ${GAP_FIX}` };
+  return gaps.length === 0 ? void 0 : { kind: "held", line: `${gaps.join("; ")}: ${gapFix(want?.lead)}` };
 }
 function judgeLockdownBase(s) {
   const fix = "run studio relay install again, elevated";
@@ -41984,13 +41997,42 @@ $script:stepAt = 0
 function Step([string]$what) { $script:stepAt++; Write-Output "[$($script:stepAt)/$stepTotal] $what" }
 ${script.slice(first.length)}`;
 }
+function relayDenyScript(o2) {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser))
+    throw new Error(`not a user name: ${o2.relayUser}`);
+  return withSteps(`#Requires -RunAsAdministrator
+$ErrorActionPreference = 'Stop'
+${MACHINE_PATH}$relay = ${psQuote(o2.relayUser)}
+$machine = ${psQuote(o2.machine)}
+${crewAccountFunctions(o2.crewPrefix, { treeSource: brokerPlaces(o2.machine).treeSource, treeTemp: brokerPlaces(o2.machine).treeTemp })}${relayJobFunctions({ relayUser: o2.relayUser, crewPrefix: o2.crewPrefix, forceStop: false, what: "update-deny" })}Step 'no relay job may run while the rules are rewritten'
+NoRelayJob
+Step 'the relay account and the group of the crew users of the install'
+$u = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
+if ($null -eq $u -or $u.Description -ne 'Studio relay (SSH, forced command)') { throw "there is no relay account $relay that Studio made here: run studio relay install first" }
+$relaySid = $u.SID.Value
+$group = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
+if ($null -eq $group -or $group.Description -ne $groupDescription) { throw "there is no group of crew users $($prefix)s that Studio made here: run studio relay install first" }
+$groupSid = $group.SID.Value
+Step 'network lockdown'
+${lockdownSection(o2.lockdown, "@($relaySid, $groupSid)")}Step 'the install record: the deny.hosts names and their addresses'
+$recordFile = ${psQuote(installRecordFile(o2.machine))}
+$rec = Get-Content -Raw -LiteralPath $recordFile | ConvertFrom-Json
+$rec | Add-Member -NotePropertyName lockdownNames -NotePropertyValue (ConvertFrom-Json ${psQuote(JSON.stringify(o2.lockdown.names))}) -Force
+$tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+[IO.File]::WriteAllText($tmp, (ConvertTo-Json -Compress -Depth 6 $rec), (New-Object Text.ASCIIEncoding))
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $recordFile" }
+[IO.File]::Replace($tmp, $recordFile, [NullString]::Value)
+icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
+`);
+}
 var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
   $dir = Split-Path -Parent $conf
   $tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')
   $keyDir = $null
   [IO.File]::WriteAllText($tmp, $text, (New-Object Text.UTF8Encoding $false))
   try {
-    $exe = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
+    $exe = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\OpenSSH\sshd.exe'
     if (Test-Path -LiteralPath $exe) {
       $sshdArgs = '-t -f "' + $tmp + '"'
       if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
@@ -42005,7 +42047,7 @@ var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text,
         $made = Get-Item -LiteralPath $keyDir -Force
         if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
         $key = Join-Path $keyDir 'host_ed25519'
-        $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
+        $kg = Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
         if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
         $sshdArgs += ' -h "' + $key + '"'
       }
@@ -42108,7 +42150,7 @@ function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Mach
 # winget from its package in Program Files (administrators only), never the alias in the user's
 # WindowsApps folder.
 function Winget {
-  $apps = Join-Path $env:ProgramFiles 'WindowsApps'
+  $apps = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsApps'
   @(Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe' -ErrorAction SilentlyContinue |
     Sort-Object { try { [version]($_.Name.Split('_')[1]) } catch { [version]'0.0' } } -Descending |
     ForEach-Object { Join-Path $_.FullName 'winget.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
@@ -42123,7 +42165,7 @@ function Need([string]$what, [scriptblock]$have, [string]$id) {
   if (-not (& $have)) { throw "$what is still missing after winget install $id; install it for all users by hand" }
 }
 Step 'prerequisites: Git, Claude Code, the OpenSSH server'
-Need 'Git' { Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
+Need 'Git' { Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
@@ -42152,7 +42194,7 @@ KbdInteractiveAuthentication no
 # studio relay end global
 `;
   return `Step 'sshd: its block (checked with sshd -t), the firewall rule, start'
-$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
+$conf = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ssh\\sshd_config'
 if (-not (Test-Path -LiteralPath $conf)) {
   # The first start of sshd writes its default config; it stays stopped afterwards.
   Start-Service sshd
@@ -42361,10 +42403,26 @@ var SYSTEM_TOOLS = /* @__PURE__ */ new Set([
   "tasklist",
   "whoami"
 ]);
-function systemTool(file4, env = process.env, platform2 = process.platform) {
+var windowsDir;
+function windowsDirectory() {
+  if (windowsDir !== void 0) return windowsDir;
+  let real;
+  try {
+    real = realpathSync8.native("\\\\?\\GLOBALROOT\\SystemRoot");
+  } catch (e) {
+    throw new Error(`cannot resolve the Windows folder (\\SystemRoot): ${e.message}`);
+  }
+  const dos = real.replace(/^\\\\\?\\/, "");
+  if (!/^[A-Za-z]:\\[^\\/:*?"<>|]+$/.test(dos)) {
+    throw new Error(`the Windows folder resolves to ${real}, not a folder on a drive`);
+  }
+  windowsDir = dos;
+  return dos;
+}
+function systemTool(file4, windows = windowsDirectory, platform2 = process.platform) {
   if (platform2 !== "win32") return file4;
   const name = file4.toLowerCase().replace(/\.exe$/, "");
-  const sys = win322.join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32");
+  const sys = win322.join(windows(), "System32");
   if (name === "powershell") return win322.join(sys, "WindowsPowerShell", "v1.0", "powershell.exe");
   return SYSTEM_TOOLS.has(name) ? win322.join(sys, `${name}.exe`) : file4;
 }
@@ -51836,8 +51894,8 @@ var killDescendantsWindows = (subprocess, signal) => {
   return true;
 };
 var getTaskkillFile = () => {
-  const windowsDirectory = [process12.env.SystemRoot, process12.env.windir].find((directory) => directory && isWindowsDriveAbsolutePath(directory));
-  return windowsDirectory === void 0 ? void 0 : path9.join(windowsDirectory, "System32", "taskkill.exe");
+  const windowsDirectory2 = [process12.env.SystemRoot, process12.env.windir].find((directory) => directory && isWindowsDriveAbsolutePath(directory));
+  return windowsDirectory2 === void 0 ? void 0 : path9.join(windowsDirectory2, "System32", "taskkill.exe");
 };
 var isWindowsDriveAbsolutePath = (directory) => {
   const { root } = path9.parse(directory);
@@ -55664,8 +55722,8 @@ function readPushed(file4) {
   }
   try {
     const raw = JSON.parse(readFileSync37(file4, "utf8"));
-    const isMap6 = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((x) => typeof x === "string");
-    if (!isMap6(raw?.sent) || !isMap6(raw?.last)) return void 0;
+    const isMap7 = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((x) => typeof x === "string");
+    if (!isMap7(raw?.sent) || !isMap7(raw?.last)) return void 0;
     return {
       sent: Object.assign(/* @__PURE__ */ Object.create(null), raw.sent),
       last: Object.assign(/* @__PURE__ */ Object.create(null), raw.last)
@@ -61585,12 +61643,16 @@ var COMMANDS = [
     about: "On the lead: print the line that removes a Windows relay worker with the bootstrap of this Studio's release, checked against this Studio"
   },
   {
+    usage: "relay pair <label> --update-deny [--dry-run]",
+    about: "On the lead: print the line that adds the deny list of your projects for that worker to it (signed with the lead's key for it; no new pairing)"
+  },
+  {
     usage: "relay pair <label> --connect [--dry-run]",
     about: "On the lead: pin the host key the worker proves with the pairing secret; write workers.relay.<label>"
   },
   {
-    usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--block-smb-lan] [--i-am-local] [--force-stop] [--dry-run]",
-    about: "On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead"
+    usage: "relay install [--pair <line> | --pair -] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--block-smb-lan] [--i-am-local] [--force-stop] [--dry-run]",
+    about: "On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead and adds its deny list (--pair -: the line on stdin)"
   },
   {
     usage: "relay uninstall [--keep-tree] [--force-stop] [--force-path] [--user <name>] [--home <dir>] [--i-am-local] [--dry-run]",
@@ -61599,6 +61661,10 @@ var COMMANDS = [
   {
     usage: "relay unpair <label> [--home <dir>] [--dry-run]",
     about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key"
+  },
+  {
+    usage: "relay update-deny <line> [--dry-run]",
+    about: "On a Windows worker, elevated: take a line of relay pair <label> --update-deny, checked against that lead's key; add its deny list to workers.serve.deny and write the firewall rules anew"
   },
   {
     usage: "relay setup [--home <dir>] [--user <name>] [--no-firewall]",
@@ -62134,15 +62200,13 @@ ${lines2.join("\n")}
 // src/relay-command.ts
 import { spawn as spawn6 } from "node:child_process";
 import {
-  existsSync as existsSync19,
-  mkdirSync as mkdirSync13,
-  readFileSync as readFileSync57,
-  renameSync as renameSync16,
-  rmSync as rmSync13,
-  writeFileSync as writeFileSync21
+  existsSync as existsSync20,
+  mkdirSync as mkdirSync14,
+  readFileSync as readFileSync58,
+  rmSync as rmSync14
 } from "node:fs";
 import { homedir as homedir13 } from "node:os";
-import { dirname as dirname21, join as join64, resolve as resolve15, win32 as win324 } from "node:path";
+import { dirname as dirname22, join as join64, resolve as resolve15, win32 as win324 } from "node:path";
 
 // src/relay-bootstrap.ts
 import { createHash as createHash8 } from "node:crypto";
@@ -62211,12 +62275,268 @@ function bootstrapCommand(o2, anchor2 = leadAnchor(), version2 = STUDIO_VERSION,
   return `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $b = (Invoke-WebRequest -UseBasicParsing -Uri '${url2}').RawContentStream.ToArray(); if ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-', '') -ne '${anchor2.bootstrapSha}') { throw 'this is not the bootstrap of Studio ${version2} the lead runs: nothing was run' }; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($b))) ${args} -Tree '${anchor2.tree}'`;
 }
 
+// src/relay-deny-sync.ts
+var import_yaml17 = __toESM(require_dist(), 1);
+import { createHash as createHash9, createPublicKey, verify } from "node:crypto";
+import { existsSync as existsSync15, mkdirSync as mkdirSync12, readFileSync as readFileSync51, renameSync as renameSync15, rmSync as rmSync11, writeFileSync as writeFileSync17 } from "node:fs";
+import { dirname as dirname18 } from "node:path";
+var EMPTY_DENY = { hosts: [], ports: [], prefixes: [] };
+function canonicalDeny(d) {
+  const sorted = (xs) => [...new Set(xs)].sort();
+  return {
+    hosts: sorted((d.hosts ?? []).map((h2) => h2.toLowerCase())),
+    ports: [...new Set(d.ports ?? [])].sort((a2, b) => a2 - b),
+    prefixes: sorted(d.prefixes ?? [])
+  };
+}
+var unionDeny = (...sets) => canonicalDeny({
+  hosts: sets.flatMap((s) => s.hosts ?? []),
+  ports: sets.flatMap((s) => s.ports ?? []),
+  prefixes: sets.flatMap((s) => s.prefixes ?? [])
+});
+var denyJson = (d) => JSON.stringify(canonicalDeny(d));
+var denyDigest = (d) => createHash9("sha256").update(denyJson(d)).digest("hex");
+var encodeDeny = (d) => Buffer.from(denyJson(d), "utf8").toString("base64url");
+function decodeDeny(text2) {
+  if (!/^[A-Za-z0-9_-]{1,8000}$/.test(text2)) throw new Error("the deny set is not base64url");
+  let raw;
+  try {
+    raw = JSON.parse(Buffer.from(text2, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("the deny set is not JSON");
+  }
+  const r = raw;
+  if (r === null || typeof r !== "object" || Array.isArray(r)) {
+    throw new Error("the deny set is not an object");
+  }
+  const parsed = workerDenySchema.safeParse({
+    hosts: r.hosts,
+    ports: r.ports,
+    prefixes: r.prefixes
+  });
+  if (!parsed.success) {
+    throw new Error(`the deny set is not valid: ${parsed.error.issues[0]?.message ?? "unknown"}`);
+  }
+  const d = canonicalDeny({
+    hosts: parsed.data.hosts,
+    ports: parsed.data.ports,
+    prefixes: parsed.data.prefixes ?? []
+  });
+  if (denyJson(d) !== JSON.stringify(raw))
+    throw new Error("the deny set is not in its one spelling");
+  return d;
+}
+function leadDenyFor(stateBase, label) {
+  const sets = [];
+  const projects = [];
+  const problems = [];
+  for (const root of projectStateRoots(stateBase)) {
+    if (root.endsWith(`/${OWNER_DIR}`) || root.endsWith(`\\${OWNER_DIR}`)) continue;
+    let project;
+    try {
+      project = markerProject(root);
+    } catch (e) {
+      problems.push(e.message);
+      continue;
+    }
+    if (project === void 0 || !existsSync15(project)) continue;
+    try {
+      const d = loadConfig(project).workers?.[label]?.deny;
+      if (d === void 0) continue;
+      projects.push(project);
+      sets.push({ hosts: d.hosts, ports: d.ports, prefixes: d.prefixes ?? [] });
+    } catch (e) {
+      problems.push(`${project}: ${e.message}`);
+    }
+  }
+  const deny = unionDeny(...sets);
+  for (const k of ["hosts", "ports", "prefixes"]) {
+    if (deny[k].length > 50) {
+      throw new Error(
+        `the projects of ${label} deny ${deny[k].length} ${k}, more than 50 a worker takes`
+      );
+    }
+  }
+  return { deny, projects, problems };
+}
+function serveDenyOf(text2) {
+  const doc = (0, import_yaml17.parseDocument)(text2 === "" ? "{}" : text2);
+  const get = (k) => {
+    const v = doc.getIn(["workers", "serve", "deny", k]);
+    return (0, import_yaml17.isSeq)(v) ? v.toJSON() : [];
+  };
+  return canonicalDeny({
+    hosts: get("hosts").map(String),
+    ports: get("ports").map(Number),
+    prefixes: get("prefixes").map(String)
+  });
+}
+function addToServeDeny(file4, add, fallback) {
+  let text2 = fallback;
+  try {
+    text2 = readFileSync51(file4, "utf8");
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  const doc = (0, import_yaml17.parseDocument)(text2 === "" ? "{}" : text2);
+  if (doc.errors.length > 0) throw new Error(`${file4}: invalid YAML; nothing changed`);
+  if (!(0, import_yaml17.isMap)(doc.contents)) throw new Error(`${file4}: not a map; nothing changed`);
+  const before = serveDenyOf(text2);
+  const want = canonicalDeny(add);
+  const added = {
+    hosts: want.hosts.filter((h2) => !before.hosts.includes(h2)),
+    ports: want.ports.filter((p) => !before.ports.includes(p)),
+    prefixes: want.prefixes.filter((p) => !before.prefixes.includes(p))
+  };
+  const fresh = !existsSync15(file4);
+  if (!fresh && added.hosts.length + added.ports.length + added.prefixes.length === 0) {
+    return added;
+  }
+  const list2 = (k) => {
+    const v = doc.getIn(["workers", "serve", "deny", k]);
+    return (0, import_yaml17.isSeq)(v) ? v.toJSON() : [];
+  };
+  for (const k of ["hosts", "ports", "prefixes"]) {
+    if (added[k].length > 0) doc.setIn(["workers", "serve", "deny", k], [...list2(k), ...added[k]]);
+  }
+  mkdirSync12(dirname18(file4), { recursive: true });
+  const tmp = `${file4}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync17(tmp, doc.toString(), { flag: "wx" });
+    renameSync15(tmp, file4);
+  } catch (e) {
+    rmSync11(tmp, { force: true });
+    throw e;
+  }
+  return added;
+}
+var denyText = (d) => {
+  const parts = [
+    d.hosts.length > 0 ? `hosts ${d.hosts.join(", ")}` : "",
+    d.ports.length > 0 ? `ports ${d.ports.join(", ")}` : "",
+    d.prefixes.length > 0 ? `prefixes ${d.prefixes.join(", ")}` : ""
+  ].filter((x) => x !== "");
+  return parts.length === 0 ? "nothing" : parts.join("; ");
+};
+var UPDATE_PREFIX = "studio-deny-1";
+var DENY_NAMESPACE = "studio-relay-deny@studio";
+var DENY_UPDATE_TTL_MS = 24 * 60 * 6e4;
+var denyUpdateMessage = (label, deny, issuedAt) => `${UPDATE_PREFIX}
+${label}
+${denyJson(deny)}
+${issuedAt}
+`;
+var renderDenyUpdate = (u2) => `${UPDATE_PREFIX} ${u2.label} ${encodeDeny(u2.deny)} ${u2.issuedAt} ${u2.signature.toString("base64url")}`;
+function parseDenyUpdate(line4) {
+  const parts = line4.trim().split(/\s+/);
+  const [prefix, label, deny, at2, sig] = parts;
+  if (parts.length !== 5 || prefix !== UPDATE_PREFIX || label === void 0 || !WORKER_LABEL_RE.test(label) || at2 === void 0 || !/^\d{1,12}$/.test(at2) || sig === void 0 || !/^[A-Za-z0-9_-]{100,2000}$/.test(sig)) {
+    throw new Error(
+      "not a deny update line: studio relay pair <label> --update-deny on the lead prints it (studio-deny-1 <label> <set> <time> <signature>)"
+    );
+  }
+  return {
+    label,
+    deny: decodeDeny(deny),
+    issuedAt: Number(at2),
+    signature: Buffer.from(sig, "base64url")
+  };
+}
+function sshsigBlob(armored) {
+  const m = /-----BEGIN SSH SIGNATURE-----([\s\S]*?)-----END SSH SIGNATURE-----/.exec(armored);
+  if (m === null) throw new Error("ssh-keygen gave no signature");
+  return Buffer.from(m[1].replace(/\s+/g, ""), "base64");
+}
+function wire(buf) {
+  let at2 = 0;
+  return {
+    bytes(n4) {
+      if (at2 + n4 > buf.length) throw new Error("the signature is cut short");
+      const b = buf.subarray(at2, at2 + n4);
+      at2 += n4;
+      return b;
+    },
+    u32() {
+      return this.bytes(4).readUInt32BE(0);
+    },
+    str() {
+      const n4 = this.u32();
+      if (n4 > 1 << 16) throw new Error("the signature holds an oversized field");
+      return this.bytes(n4);
+    },
+    done: () => at2 === buf.length
+  };
+}
+var sshString = (b) => {
+  const x = typeof b === "string" ? Buffer.from(b, "utf8") : b;
+  const n4 = Buffer.alloc(4);
+  n4.writeUInt32BE(x.length, 0);
+  return Buffer.concat([n4, x]);
+};
+var ED25519_SPKI = Buffer.from("302a300506032b6570032100", "hex");
+function sshsigHolds(publicKey, namespace, message, blob) {
+  try {
+    if (!RELAY_HOST_KEY_RE.test(publicKey) || !publicKey.startsWith("ssh-ed25519 ")) return false;
+    const keyBlob = Buffer.from(publicKey.split(" ")[1], "base64");
+    const r = wire(blob);
+    if (r.bytes(6).toString("latin1") !== "SSHSIG" || r.u32() !== 1) return false;
+    const pk = r.str();
+    const ns = r.str().toString("utf8");
+    const reserved = r.str();
+    const hashAlg = r.str().toString("utf8");
+    const sig = r.str();
+    if (!r.done() || !pk.equals(keyBlob) || ns !== namespace) return false;
+    if (hashAlg !== "sha512" && hashAlg !== "sha256") return false;
+    const k = wire(pk);
+    if (k.str().toString("latin1") !== "ssh-ed25519") return false;
+    const raw = k.str();
+    if (!k.done() || raw.length !== 32) return false;
+    const s = wire(sig);
+    if (s.str().toString("latin1") !== "ssh-ed25519") return false;
+    const ed = s.str();
+    if (!s.done() || ed.length !== 64) return false;
+    const signed = Buffer.concat([
+      Buffer.from("SSHSIG", "latin1"),
+      sshString(namespace),
+      sshString(reserved),
+      sshString(hashAlg),
+      sshString(createHash9(hashAlg).update(message, "utf8").digest())
+    ]);
+    const key = createPublicKey({
+      key: Buffer.concat([ED25519_SPKI, raw]),
+      format: "der",
+      type: "spki"
+    });
+    return verify(null, signed, key, ed);
+  } catch {
+    return false;
+  }
+}
+function denyUpdateProblem(u2, pairingKey, now) {
+  if (pairingKey === void 0) {
+    return `no lead ${u2.label} is paired here: studio relay install --pair with its line first`;
+  }
+  const at2 = u2.issuedAt * 1e3;
+  if (at2 > now.getTime() + 5 * 6e4 || now.getTime() - at2 > DENY_UPDATE_TTL_MS) {
+    return `the line is older than a day (or from the future): run studio relay pair ${u2.label} --update-deny on the lead again`;
+  }
+  if (!sshsigHolds(
+    pairingKey,
+    DENY_NAMESPACE,
+    denyUpdateMessage(u2.label, u2.deny, u2.issuedAt),
+    u2.signature
+  )) {
+    return `the line is not signed with the key of lead ${u2.label} that this worker authorized: nothing changed`;
+  }
+  return void 0;
+}
+
 // src/relay-lead.ts
-import { existsSync as existsSync15, lstatSync as lstatSync44, readFileSync as readFileSync51, writeFileSync as writeFileSync17 } from "node:fs";
+import { existsSync as existsSync16, lstatSync as lstatSync44, readFileSync as readFileSync52, writeFileSync as writeFileSync18 } from "node:fs";
 import { isAbsolute as isAbsolute12, join as join57, resolve as resolve13 } from "node:path";
 
 // src/relay-protocol.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 var RELAY_PROTOCOL = 1;
 var MAX_HEADER_BYTES = 1024 * 1024;
 var MAX_START_BUNDLE_BYTES = 1024 * 1024 * 1024;
@@ -62382,8 +62702,8 @@ function fromWire(v, key = "") {
   );
 }
 function* encodeMessage(header, payload) {
-  const wire = toWire({ ...header, ...payload === void 0 ? {} : { payload: true } });
-  yield `${JSON.stringify(wire)}
+  const wire2 = toWire({ ...header, ...payload === void 0 ? {} : { payload: true } });
+  yield `${JSON.stringify(wire2)}
 `;
   if (payload === void 0) return;
   for (let at2 = 0; at2 < payload.length; at2 += CHUNK_BYTES) {
@@ -62398,7 +62718,7 @@ function* encodeMessage(header, payload) {
   yield `${JSON.stringify({ end: payload.length, sha256: sha2562(payload) })}
 `;
 }
-var sha2562 = (b) => createHash9("sha256").update(b).digest("hex");
+var sha2562 = (b) => createHash10("sha256").update(b).digest("hex");
 var LineReader = class {
   constructor(input2, max, maxTotal = Number.POSITIVE_INFINITY) {
     this.max = max;
@@ -62669,11 +62989,11 @@ var file3 = (stateRoot) => join57(stateRoot, RELAY_FILE);
 function readRelay(stateRoot) {
   const f3 = file3(stateRoot);
   assertStatePath(stateRoot, f3);
-  if (!existsSync15(f3)) return { items: {} };
+  if (!existsSync16(f3)) return { items: {} };
   if (!lstatSync44(f3).isFile()) throw new Error(`${f3} is not a plain file`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync51(f3, "utf8"));
+    raw = JSON.parse(readFileSync52(f3, "utf8"));
   } catch {
     throw new Error(`${f3} is not valid JSON`);
   }
@@ -62724,7 +63044,7 @@ async function projectObjects(project, ports) {
 }
 async function relayGit(stateRoot, project, ports) {
   const dir = join57(stateRoot, "relay", "git");
-  if (!existsSync15(join57(dir, "HEAD"))) {
+  if (!existsSync16(join57(dir, "HEAD"))) {
     ensureStateDir(stateRoot, join57(stateRoot, "relay"));
     removeStateEntry(stateRoot, dir);
     await ports.git.run(join57(stateRoot, "relay"), ["init", "-q", "--bare", "--template=", dir]);
@@ -62769,7 +63089,7 @@ async function startBundle(o2) {
       "refs/heads/main",
       ...fromSha === void 0 ? [] : [branch]
     ]);
-    const bytes = readFileSync51(out);
+    const bytes = readFileSync52(out);
     if (bytes.length > MAX_START_BUNDLE_BYTES) {
       throw new Error("the repository is larger than a relay start may carry");
     }
@@ -62928,7 +63248,7 @@ async function acceptResult(o2) {
     removeStateEntry(o2.stateRoot, baseFile);
     const file4 = join57(dir, "result.bundle");
     writeStateFile(o2.stateRoot, file4, "");
-    writeFileSync17(file4, o2.bundle);
+    writeFileSync18(file4, o2.bundle);
     let heads;
     try {
       heads = (await g3(["bundle", "list-heads", file4])).split("\n").filter((l) => l.trim() !== "");
@@ -63059,34 +63379,57 @@ async function relayDoctor(o2) {
 }
 
 // src/relay-pair.ts
-var import_yaml17 = __toESM(require_dist(), 1);
-import { createHash as createHash10, createHmac, randomBytes as randomBytes12, timingSafeEqual } from "node:crypto";
-import { existsSync as existsSync16, mkdirSync as mkdirSync12, readFileSync as readFileSync52, renameSync as renameSync15, rmSync as rmSync11, writeFileSync as writeFileSync18 } from "node:fs";
-import { dirname as dirname18, join as join58 } from "node:path";
+var import_yaml18 = __toESM(require_dist(), 1);
+import { createHash as createHash11, createHmac, randomBytes as randomBytes12, timingSafeEqual } from "node:crypto";
+import { existsSync as existsSync17, mkdirSync as mkdirSync13, readFileSync as readFileSync53, renameSync as renameSync16, rmSync as rmSync12, writeFileSync as writeFileSync19 } from "node:fs";
+import { dirname as dirname19, join as join58 } from "node:path";
 var PAIR_TTL_MS = 60 * 6e4;
 var PAIR_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
-var PAIR_PREFIX = "studio-pair-1";
+var PAIR_PREFIX = "studio-pair-2";
 var newPairSecret = () => randomBytes12(32).toString("base64url");
 var keyOnly = (key) => key.trim().split(/\s+/).slice(0, 2).join(" ");
 function keyFingerprint(key) {
   const blob = Buffer.from(key.trim().split(/\s+/)[1] ?? "", "base64");
-  return `SHA256:${createHash10("sha256").update(blob).digest("base64").replace(/=+$/, "")}`;
+  return `SHA256:${createHash11("sha256").update(blob).digest("base64").replace(/=+$/, "")}`;
 }
-var pairProof = (secret, hostKey) => createHmac("sha256", secret).update(keyOnly(hostKey)).digest("hex");
-function proofHolds(secret, hostKey, mac3) {
+var pairProof = (secret, hostKey, deny = denyDigest(EMPTY_DENY)) => createHmac("sha256", secret).update(`${keyOnly(hostKey)}
+${deny}`).digest("hex");
+function proofHolds(secret, hostKey, mac3, deny) {
   if (!/^[0-9a-f]{64}$/.test(mac3)) return false;
-  return timingSafeEqual(Buffer.from(pairProof(secret, hostKey), "hex"), Buffer.from(mac3, "hex"));
+  return timingSafeEqual(
+    Buffer.from(pairProof(secret, hostKey, deny), "hex"),
+    Buffer.from(mac3, "hex")
+  );
 }
-var renderPairLine = (p) => `${PAIR_PREFIX} ${p.label} ${p.secret} ${p.key}`;
+var lineMac = (p) => createHmac("sha256", p.secret).update(`${PAIR_PREFIX}
+${p.label}
+${keyOnly(p.key)}
+${denyJson(p.deny)}`).digest("hex");
+var renderPairLine = (p) => `${PAIR_PREFIX} ${p.label} ${p.secret} ${p.key} ${encodeDeny(p.deny)} ${lineMac(p)}`;
 function parsePairLine(line4) {
   const parts = line4.trim().split(/\s+/);
-  const [prefix, label, secret, type, blob] = parts;
-  if (parts.length !== 5 || prefix !== PAIR_PREFIX || label === void 0 || !WORKER_LABEL_RE.test(label) || secret === void 0 || !PAIR_SECRET_RE.test(secret) || !RELAY_HOST_KEY_RE.test(`${type} ${blob}`)) {
+  const [prefix, label, secret, type, blob, deny, mac3] = parts;
+  const bad = () => new Error(
+    "not a pairing line: studio relay pair <label> <host> on the lead prints it (studio-pair-2 <label> <secret> <key> <deny set> <mac>)"
+  );
+  if (parts.length !== 7 || prefix !== PAIR_PREFIX || label === void 0 || !WORKER_LABEL_RE.test(label) || secret === void 0 || !PAIR_SECRET_RE.test(secret) || !RELAY_HOST_KEY_RE.test(`${type} ${blob}`) || mac3 === void 0 || !/^[0-9a-f]{64}$/.test(mac3)) {
+    throw bad();
+  }
+  let set2;
+  try {
+    set2 = decodeDeny(deny);
+  } catch (e) {
     throw new Error(
-      "not a pairing line: studio relay pair <label> <host> on the lead prints it (studio-pair-1 <label> <secret> <key>)"
+      `the pairing line's deny set: ${e.message}; copy the whole line again`
     );
   }
-  return { label, secret, key: `${type} ${blob}` };
+  const p = { label, secret, key: `${type} ${blob}`, deny: set2 };
+  if (!timingSafeEqual(Buffer.from(lineMac(p), "hex"), Buffer.from(mac3, "hex"))) {
+    throw new Error(
+      "the pairing line was changed on the way (its MAC does not hold): nothing was installed; copy the whole line again"
+    );
+  }
+  return p;
 }
 var leadKeyFile = (owner, label) => join58(ownerConfigDir(owner), "relay", `${label}_ed25519`);
 var pendingFile = (owner, label) => join58(ownerStateRootFor(owner), "relay", `pair-${label}.json`);
@@ -63098,22 +63441,22 @@ function writePending(owner, p) {
 }
 function readPending(owner, label, now, o2 = {}) {
   const f3 = pendingFile(owner, label);
-  if (!existsSync16(f3)) return void 0;
-  const p = JSON.parse(readFileSync52(f3, "utf8"));
+  if (!existsSync17(f3)) return void 0;
+  const p = JSON.parse(readFileSync53(f3, "utf8"));
   if (p.label !== label || !RELAY_HOST_RE.test(p.host) || !PAIR_SECRET_RE.test(p.secret) || !Number.isInteger(p.port) || Number.isNaN(Date.parse(p.createdAt))) {
     throw new Error(
       `${f3} has an unknown shape; start again with studio relay pair ${label} <host>`
     );
   }
   if (now.getTime() - Date.parse(p.createdAt) > PAIR_TTL_MS) {
-    if (o2.keep !== true) rmSync11(f3, { force: true });
+    if (o2.keep !== true) rmSync12(f3, { force: true });
     throw new Error(
       `the pairing of ${label} expired (an hour): start again with studio relay pair ${label} <host>`
     );
   }
   return p;
 }
-var dropPending = (owner, label) => rmSync11(pendingFile(owner, label), { force: true });
+var dropPending = (owner, label) => rmSync12(pendingFile(owner, label), { force: true });
 function keyscanKey(stdout) {
   for (const line4 of stdout.split("\n")) {
     if (line4.startsWith("#")) continue;
@@ -63127,13 +63470,13 @@ function writeRelayTarget(owner, label, t) {
   const file4 = ownerConfigFile(owner);
   let text2 = "";
   try {
-    text2 = readFileSync52(file4, "utf8");
+    text2 = readFileSync53(file4, "utf8");
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
-  const doc = (0, import_yaml17.parseDocument)(text2 === "" ? "{}" : text2);
+  const doc = (0, import_yaml18.parseDocument)(text2 === "" ? "{}" : text2);
   if (doc.errors.length > 0) throw new Error(`${file4}: invalid YAML; nothing changed`);
-  if (!(0, import_yaml17.isMap)(doc.contents)) throw new Error(`${file4}: not a map; nothing changed`);
+  if (!(0, import_yaml18.isMap)(doc.contents)) throw new Error(`${file4}: not a map; nothing changed`);
   doc.setIn(["workers", "relay", label], {
     host: t.host,
     user: t.user,
@@ -63141,20 +63484,20 @@ function writeRelayTarget(owner, label, t) {
     host_key: t.hostKey,
     identity_file: t.identityFile
   });
-  mkdirSync12(dirname18(file4), { recursive: true, mode: 448 });
+  mkdirSync13(dirname19(file4), { recursive: true, mode: 448 });
   const tmp = `${file4}.${process.pid}.${Date.now()}.tmp`;
   try {
-    writeFileSync18(tmp, doc.toString(), { mode: 384, flag: "wx" });
-    renameSync15(tmp, file4);
+    writeFileSync19(tmp, doc.toString(), { mode: 384, flag: "wx" });
+    renameSync16(tmp, file4);
   } catch (e) {
-    rmSync11(tmp, { force: true });
+    rmSync12(tmp, { force: true });
     throw e;
   }
   try {
     loadOwnerConfig(owner);
   } catch (e) {
-    if (text2 === "") rmSync11(file4, { force: true });
-    else writeFileSync18(file4, text2, { mode: 384 });
+    if (text2 === "") rmSync12(file4, { force: true });
+    else writeFileSync19(file4, text2, { mode: 384 });
     throw e;
   }
 }
@@ -63162,7 +63505,7 @@ var pairingsFile = (machine) => join58(machine, "pairing", "pairings.json");
 function readPairings(machine) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync52(pairingsFile(machine), "utf8"));
+    raw = JSON.parse(readFileSync53(pairingsFile(machine), "utf8"));
   } catch {
     return {};
   }
@@ -63170,22 +63513,27 @@ function readPairings(machine) {
   const out = {};
   for (const [label, v] of Object.entries(raw)) {
     if (WORKER_LABEL_RE.test(label) && typeof v?.key === "string" && RELAY_HOST_KEY_RE.test(v.key) && typeof v.secret === "string" && PAIR_SECRET_RE.test(v.secret) && typeof v.pairedAt === "string" && !Number.isNaN(Date.parse(v.pairedAt))) {
-      out[label] = { key: v.key, secret: v.secret, pairedAt: v.pairedAt };
+      out[label] = {
+        key: v.key,
+        secret: v.secret,
+        pairedAt: v.pairedAt,
+        ...typeof v.denyDigest === "string" && /^[0-9a-f]{64}$/.test(v.denyDigest) ? { denyDigest: v.denyDigest } : {}
+      };
     }
   }
   return out;
 }
 function writePairings(machine, all) {
   const file4 = pairingsFile(machine);
-  mkdirSync12(dirname18(file4), { recursive: true });
+  mkdirSync13(dirname19(file4), { recursive: true });
   const tmp = `${file4}.${process.pid}.tmp`;
-  writeFileSync18(tmp, `${JSON.stringify(all, null, 2)}
+  writeFileSync19(tmp, `${JSON.stringify(all, null, 2)}
 `);
-  renameSync15(tmp, file4);
+  renameSync16(tmp, file4);
 }
 function pairProofs(pairings, hostKey, now) {
   if (hostKey === void 0) return [];
-  return Object.entries(pairings).filter(([, p]) => now.getTime() - Date.parse(p.pairedAt) <= PAIR_TTL_MS).map(([label, p]) => ({ label, mac: pairProof(p.secret, hostKey) }));
+  return Object.entries(pairings).filter(([, p]) => now.getTime() - Date.parse(p.pairedAt) <= PAIR_TTL_MS).map(([label, p]) => ({ label, mac: pairProof(p.secret, hostKey, p.denyDigest) }));
 }
 function authorizedKeysPlan(o2) {
   const labels = Object.keys(o2.pairings).sort();
@@ -63210,26 +63558,26 @@ import { spawn as spawn5 } from "node:child_process";
 import { randomBytes as randomBytes13 } from "node:crypto";
 import {
   closeSync as closeSync9,
-  existsSync as existsSync18,
+  existsSync as existsSync19,
   constants as fsConstants,
   fstatSync as fstatSync5,
   lstatSync as lstatSync46,
   openSync as openSync9,
   readdirSync as readdirSync19,
-  readFileSync as readFileSync54,
+  readFileSync as readFileSync55,
   readSync as readSync5,
   statfsSync,
-  writeFileSync as writeFileSync19,
+  writeFileSync as writeFileSync20,
   writeSync as writeSync3
 } from "node:fs";
 import { cpus, homedir as homedir12 } from "node:os";
-import { dirname as dirname20, join as join60, resolve as resolve14 } from "node:path";
+import { dirname as dirname21, join as join60, resolve as resolve14 } from "node:path";
 import { fileURLToPath as fileURLToPath8, pathToFileURL } from "node:url";
 
 // src/worker.ts
-import { existsSync as existsSync17, lstatSync as lstatSync45, readdirSync as readdirSync18, readFileSync as readFileSync53 } from "node:fs";
+import { existsSync as existsSync18, lstatSync as lstatSync45, readdirSync as readdirSync18, readFileSync as readFileSync54 } from "node:fs";
 import { homedir as homedir11 } from "node:os";
-import { dirname as dirname19, join as join59 } from "node:path";
+import { dirname as dirname20, join as join59 } from "node:path";
 var WORKER_FILE = "worker.json";
 var WORKER_LOCK = "worker.lock";
 var WORKER_LOCK_STALE_MS = 3 * 60 * 6e4;
@@ -63237,11 +63585,11 @@ var MAX_OWN_BEATS = 20;
 function readWorkerState(stateRoot, label) {
   const file4 = join59(stateRoot, WORKER_FILE);
   assertStatePath(stateRoot, file4);
-  if (!existsSync17(file4)) return { label };
+  if (!existsSync18(file4)) return { label };
   if (!lstatSync45(file4).isFile()) throw new Error(`${file4} is not a plain file`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync53(file4, "utf8"));
+    raw = JSON.parse(readFileSync54(file4, "utf8"));
   } catch {
     throw new Error(`${file4} is not valid JSON; inspect it before the worker goes on`);
   }
@@ -63301,7 +63649,7 @@ var CONTENT_PATH = /^\.studio\/(roles|solutions)\/[A-Za-z0-9._-]{1,100}\.md$/;
 async function pinnedContent(c3, stateRoot, sha) {
   const base2 = join59(stateRoot, "pinned");
   const dir = join59(base2, sha);
-  if (existsSync17(join59(dir, ".complete"))) return dir;
+  if (existsSync18(join59(dir, ".complete"))) return dir;
   ensureStateDir(stateRoot, base2);
   for (const old of readdirSync18(base2)) removeStateEntry(stateRoot, join59(base2, old));
   const g3 = (args) => c3.ports.git.run(c3.project, ["--no-replace-objects", ...args]);
@@ -63313,7 +63661,7 @@ async function pinnedContent(c3, stateRoot, sha) {
     if (!m || !CONTENT_PATH.test(m[2]) || n4++ >= 500) continue;
     const text2 = await g3(["cat-file", "blob", m[1]]);
     const file4 = join59(dir, m[2]);
-    ensureStateDir(stateRoot, dirname19(file4));
+    ensureStateDir(stateRoot, dirname20(file4));
     writeStateFile(stateRoot, file4, `${text2}
 `);
   }
@@ -63324,7 +63672,7 @@ async function pinnedContent(c3, stateRoot, sha) {
 function crewConfigDir2(owner) {
   const env = owner.env ?? process.env;
   const stored = crewClaudeDir(owner);
-  if (existsSync17(stored)) return stored;
+  if (existsSync18(stored)) return stored;
   return env.CLAUDE_CONFIG_DIR || join59(owner.homedir ?? homedir11(), ".claude");
 }
 function strictPinProblem(configDir, pins) {
@@ -63367,7 +63715,7 @@ async function readiness(c3, stateRoot) {
       line: "this machine's GitHub token is the lead's own identity; a worker needs a token of its own, so its claims and pull requests can be told apart"
     };
   }
-  const stateBase = dirname19(stateRoot);
+  const stateBase = dirname20(stateRoot);
   const deny = enforceDeny({
     deny: mergeDeny(config2.workers?.[c3.label]?.deny, self.deny),
     platform: platform2,
@@ -63399,7 +63747,7 @@ async function readiness(c3, stateRoot) {
   if (slots.slots <= 0) {
     return { ok: false, kind: "held", line: "credential limit: no label of this machine has room" };
   }
-  if (existsSync17(ownerRoot) && inspectStateLock(ownerRoot, LAUNCH_LOCK, {
+  if (existsSync18(ownerRoot) && inspectStateLock(ownerRoot, LAUNCH_LOCK, {
     now: c3.ports.clock.now(),
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
   }).state === "held") {
@@ -64029,9 +64377,9 @@ function readJob(w, id) {
   const root = relayRoot(w.owner);
   const f3 = jobFile(w, id);
   assertStatePath(root, f3);
-  if (!existsSync18(f3)) return void 0;
+  if (!existsSync19(f3)) return void 0;
   if (!lstatSync46(f3).isFile()) throw new Error(`${f3} is not a plain file`);
-  const j = JSON.parse(readFileSync54(f3, "utf8"));
+  const j = JSON.parse(readFileSync55(f3, "utf8"));
   if (j.lead !== w.lead || j.id !== id) throw new Error(`${f3} is not a job of this lead`);
   return j;
 }
@@ -64044,10 +64392,10 @@ function writeJob(w, job) {
 }
 function allJobs(owner) {
   const leads = join60(relayRoot(owner), "leads");
-  if (!existsSync18(leads)) return [];
+  if (!existsSync19(leads)) return [];
   return readdirSync19(leads).filter((l) => LEAD_RE.test(l)).flatMap((lead) => {
     const dir = join60(leads, lead, "jobs");
-    if (!existsSync18(dir)) return [];
+    if (!existsSync19(dir)) return [];
     return readdirSync19(dir).filter((f3) => /^[A-Z]+-\d+\.json$/.test(f3)).flatMap((f3) => {
       try {
         const j = readJob({ owner, lead }, f3.slice(0, -5));
@@ -64066,7 +64414,7 @@ function serveSettings(owner) {
 }
 function crewConfigDir3(owner) {
   const stored = crewClaudeDir(owner);
-  if (existsSync18(stored)) return stored;
+  if (existsSync19(stored)) return stored;
   const env = owner.env ?? process.env;
   return env.CLAUDE_CONFIG_DIR || join60(owner.homedir ?? homedir12(), ".claude");
 }
@@ -64151,7 +64499,7 @@ async function readiness2(c3, o2) {
     return { problem: { kind: "held", line: busy2 }, deny, ...load2 ? { load: load2 } : {}, warnings: warnings2 };
   }
   if (native && c3.windows !== void 0) {
-    const w = await c3.windows.check({ deny, hosts: deny.hosts ?? [] });
+    const w = await c3.windows.check({ deny, hosts: deny.hosts ?? [], lead: c3.lead });
     warnings2.push(...w.warnings);
     if (w.problem !== void 0) {
       return { problem: w.problem, deny, ...load2 ? { load: load2 } : {}, warnings: warnings2 };
@@ -64201,13 +64549,13 @@ async function takeBundle(c3, job, bundle) {
   const inbox = ensureStateDir(root, join60(root, "in"));
   const file4 = join60(inbox, `${job.id}.bundle`);
   writeStateFile(root, file4, "");
-  writeFileSync19(file4, bundle);
+  writeFileSync20(file4, bundle);
   try {
     const mirror = mirrorDir(c3, job.repo);
-    if (!existsSync18(join60(mirror, "HEAD"))) {
-      ensureStateDir(root, dirname20(mirror));
+    if (!existsSync19(join60(mirror, "HEAD"))) {
+      ensureStateDir(root, dirname21(mirror));
       removeStateEntry(root, mirror);
-      await git(c3, dirname20(mirror), ["init", "-q", "--bare", "--template=", mirror]);
+      await git(c3, dirname21(mirror), ["init", "-q", "--bare", "--template=", mirror]);
     }
     const heads = (await git(c3, mirror, ["bundle", "list-heads", file4])).split("\n").filter((l) => l.trim() !== "");
     const want = /* @__PURE__ */ new Map([["refs/heads/main", job.sha]]);
@@ -64230,10 +64578,10 @@ async function takeBundle(c3, job, bundle) {
     }
     const project = projectDir(c3, job.repo);
     const url2 = pathToFileURL(mirror).href;
-    if (!existsSync18(join60(project, ".git"))) {
-      ensureStateDir(root, dirname20(project));
+    if (!existsSync19(join60(project, ".git"))) {
+      ensureStateDir(root, dirname21(project));
       removeStateEntry(root, project);
-      await git(c3, dirname20(project), ["clone", "-q", "--no-checkout", url2, project]);
+      await git(c3, dirname21(project), ["clone", "-q", "--no-checkout", url2, project]);
     } else {
       await git(c3, project, [
         "fetch",
@@ -64469,7 +64817,7 @@ async function runRelayJob(c3, id, specText) {
       CLAUDE_CODE_OAUTH_TOKEN: job.token
     };
     const configDir = crewClaudeDir(c3.owner);
-    if (existsSync18(configDir)) env.CLAUDE_CONFIG_DIR = configDir;
+    if (existsSync19(configDir)) env.CLAUDE_CONFIG_DIR = configDir;
     const ports = windows === void 0 ? c3.ports : { ...c3.ports, claude: windows.claude };
     await launchCrew(
       project,
@@ -64571,7 +64919,7 @@ async function collect2(c3, id, out) {
   removeStateEntry(root, dir);
   const branch = `refs/heads/studio/${id}`;
   try {
-    await git(c3, dirname20(dir), ["init", "-q", "--bare", "--template=", dir]);
+    await git(c3, dirname21(dir), ["init", "-q", "--bare", "--template=", dir]);
     const mirrorObjects = join60(mirrorDir(c3, j.repo), "objects");
     writeStateFile(root, join60(dir, "objects", "info", "alternates"), `${mirrorObjects}
 `);
@@ -64633,7 +64981,7 @@ async function collect2(c3, id, out) {
         problem: "the crew committed nothing on top of the pinned commit"
       });
     }
-    const bytes = readFileSync54(file4);
+    const bytes = readFileSync55(file4);
     if (bytes.length > MAX_RESULT_BUNDLE_BYTES) {
       return answer(out, {
         ...base2,
@@ -64674,7 +65022,7 @@ async function cleanup(c3, id) {
   const root = relayRoot(c3.owner);
   removeStateEntry(root, jobFile(c3, id));
 }
-var STUDIO_BIN = resolve14(dirname20(fileURLToPath8(import.meta.url)), "..", "bin", "studio");
+var STUDIO_BIN = resolve14(dirname21(fileURLToPath8(import.meta.url)), "..", "bin", "studio");
 function relayHandoffScript(o2) {
   if (!/^[A-Z]+-\d+$/.test(o2.id)) throw new Error("not an item id");
   if (!LEAD_RE.test(o2.lead)) throw new Error("not a lead name");
@@ -64814,7 +65162,7 @@ function copyCrewObjects(clone2, dest, id, root) {
   if (ost.isSymbolicLink() || !ost.isDirectory())
     throw new Error(".git/objects is not a plain folder");
   for (const f3 of ["alternates", "http-alternates"]) {
-    if (existsSync18(join60(objects, "info", f3))) throw new Error(`the clone has objects/info/${f3}`);
+    if (existsSync19(join60(objects, "info", f3))) throw new Error(`the clone has objects/info/${f3}`);
   }
   let total = 0;
   const copy = (from, to) => {
@@ -64829,7 +65177,7 @@ function copyCrewObjects(clone2, dest, id, root) {
       }
       total += st2.size;
       if (total > MAX_CREW_OBJECTS_BYTES) throw new Error("the objects are larger than allowed");
-      ensureStateDir(root, dirname20(to));
+      ensureStateDir(root, dirname21(to));
       const out = openSync9(to, "wx", 384);
       try {
         const buf = Buffer.alloc(1 << 20);
@@ -64864,17 +65212,17 @@ function copyCrewObjects(clone2, dest, id, root) {
   }
   const sha = /^[0-9a-f]{40}$/;
   const refFile = join60(gitDir, "refs", "heads", "studio", id);
-  if (existsSync18(refFile)) {
+  if (existsSync19(refFile)) {
     const rst = lstatSync46(refFile);
     if (rst.isSymbolicLink() || !rst.isFile())
       throw new Error("the branch ref is not a plain file");
-    const v = readFileSync54(refFile, "utf8").trim();
+    const v = readFileSync55(refFile, "utf8").trim();
     if (!sha.test(v)) throw new Error("the branch ref holds no commit");
     return v;
   }
   const packed = join60(gitDir, "packed-refs");
-  if (existsSync18(packed) && lstatSync46(packed).isFile()) {
-    for (const line4 of readFileSync54(packed, "utf8").split("\n")) {
+  if (existsSync19(packed) && lstatSync46(packed).isFile()) {
+    for (const line4 of readFileSync55(packed, "utf8").split("\n")) {
       const [v, ref] = line4.trim().split(" ");
       if (ref === `refs/heads/studio/${id}` && v !== void 0 && sha.test(v)) return v;
     }
@@ -64883,7 +65231,7 @@ function copyCrewObjects(clone2, dest, id, root) {
 }
 async function indexAndCheck(c3, dir, hooks) {
   const packDir = join60(dir, "objects", "pack");
-  let todo = existsSync18(packDir) ? readdirSync19(packDir).filter((f3) => /^pack-[0-9a-f]{40,64}\.pack$/.test(f3)) : [];
+  let todo = existsSync19(packDir) ? readdirSync19(packDir).filter((f3) => /^pack-[0-9a-f]{40,64}\.pack$/.test(f3)) : [];
   while (todo.length > 0) {
     const failed2 = [];
     for (const f3 of todo) {
@@ -64912,7 +65260,7 @@ async function indexAndCheck(c3, dir, hooks) {
 }
 
 // src/relay-uninstall.ts
-import { readFileSync as readFileSync55 } from "node:fs";
+import { readFileSync as readFileSync56 } from "node:fs";
 import { posix as posix3, win32 as win323 } from "node:path";
 var join61 = (...parts) => parts[0]?.startsWith("/") === true ? posix3.join(...parts) : win323.join(...parts);
 var RELAY_DESCRIPTION = "Studio relay (SSH, forced command)";
@@ -64929,7 +65277,7 @@ var service = (x) => {
 function readInstallRecord(machine) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync55(installRecordFile(machine), "utf8").replace(/^﻿/, ""));
+    raw = JSON.parse(readFileSync56(installRecordFile(machine), "utf8").replace(/^﻿/, ""));
   } catch {
     return void 0;
   }
@@ -65131,7 +65479,7 @@ function relayUninstallScript(o2) {
   if (!/^[A-Za-z0-9 _-]{1,64}$/.test(o2.task)) throw new Error(`not a task name: ${o2.task}`);
   const tasks = Object.values(brokerTasks(o2.task));
   const step = (n4, what) => `Write-Output ${psQuote(`[${n4}/${UNINSTALL_STEPS}] ${what}`)}`;
-  const conf = o2.sshdConfig === void 0 ? "Join-Path $env:ProgramData 'ssh\\sshd_config'" : psQuote(o2.sshdConfig);
+  const conf = o2.sshdConfig === void 0 ? "Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ssh\\sshd_config'" : psQuote(o2.sshdConfig);
   const adminCopy = join61(machineStudio(o2.machine), "bin", "studio-tree.cs");
   return `#Requires -RunAsAdministrator
 # Studio: uninstall this Windows relay worker (studio relay uninstall). Run it in an elevated
@@ -65246,7 +65594,7 @@ Write-Output 'done: Studio relay worker uninstalled'
 }
 
 // src/relay-windows-check.ts
-import { readFileSync as readFileSync56 } from "node:fs";
+import { readFileSync as readFileSync57 } from "node:fs";
 import { networkInterfaces as networkInterfaces3 } from "node:os";
 import { join as join62 } from "node:path";
 
@@ -65438,7 +65786,7 @@ function relayWindows(o2) {
     credFile,
     readFile: (f3) => {
       try {
-        return readFileSync56(f3, "utf8");
+        return readFileSync57(f3, "utf8");
       } catch {
         return void 0;
       }
@@ -65455,7 +65803,7 @@ function relayWindows(o2) {
     ...o2.spawn === void 0 ? {} : { spawn: o2.spawn }
   });
   return {
-    async check({ deny, hosts }) {
+    async check({ deny, hosts, lead }) {
       const warnings2 = [];
       const admin = await elevated(run2);
       if (admin !== false) {
@@ -65473,7 +65821,8 @@ function relayWindows(o2) {
       } else {
         const want = await lockdownWant({
           deny: { hosts, ports: deny.ports, prefixes: deny.prefixes ?? [] },
-          ...o2.lookup === void 0 ? {} : { lookup: o2.lookup }
+          ...o2.lookup === void 0 ? {} : { lookup: o2.lookup },
+          ...lead === void 0 ? {} : { lead }
         });
         const lock = await (o2.lockdown ?? lockdownProblem)(run2, want);
         if (lock !== void 0) return { problem: lock, warnings: warnings2 };
@@ -65486,7 +65835,7 @@ function relayWindows(o2) {
           return {
             problem: {
               kind: "held",
-              line: `${drift.join("; ")}: run studio relay install again, elevated, so the firewall rules follow the names`
+              line: `${drift.join("; ")}: ${gapFix(lead)}`
             },
             warnings: warnings2
           };
@@ -65719,7 +66068,7 @@ ConvertTo-Json -Compress -InputObject @($problems)`;
 import { randomBytes as randomBytes14 } from "node:crypto";
 
 // src/worker-hub.ts
-import { mkdtempSync as mkdtempSync3, rmSync as rmSync12, writeFileSync as writeFileSync20 } from "node:fs";
+import { mkdtempSync as mkdtempSync3, rmSync as rmSync13, writeFileSync as writeFileSync21 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join63 } from "node:path";
 var OFFER_LABEL = "studio-offer";
@@ -65755,10 +66104,10 @@ function ghTransport(gh, token) {
         const dir = mkdtempSync3(join63(tmpdir3(), "studio-hub-"));
         try {
           const file4 = join63(dir, "body.json");
-          writeFileSync20(file4, JSON.stringify(body), { mode: 384 });
+          writeFileSync21(file4, JSON.stringify(body), { mode: 384 });
           r = await run2(["--input", file4]);
         } finally {
-          rmSync12(dir, { recursive: true, force: true });
+          rmSync13(dir, { recursive: true, force: true });
         }
       }
       if (r.code !== 0) return { status: httpStatus(r.stderr) ?? 0, json: null };
@@ -66596,7 +66945,7 @@ async function followRelayItem(d, config2, item, o2) {
   }
   const transport = d.transport(label);
   const now = d.ports.clock.now();
-  if (existsSync19(relayReportFile(d.stateRoot, item.id))) return { kind: "collect" };
+  if (existsSync20(relayReportFile(d.stateRoot, item.id))) return { kind: "collect" };
   const f3 = await followRelay({
     transport,
     stateRoot: d.stateRoot,
@@ -66817,7 +67166,7 @@ function relayContext(o2) {
     } : {}
   };
 }
-var machineOf = () => resolve15(dirname21(process.execPath), "..");
+var machineOf = () => resolve15(dirname22(process.execPath), "..");
 async function readAll(input2) {
   let s = "";
   for await (const c3 of input2) s += typeof c3 === "string" ? c3 : Buffer.from(c3).toString("utf8");
@@ -66830,7 +67179,7 @@ function readHostKey(env, platform2) {
     "ssh_host_ed25519_key.pub"
   ) : "/etc/ssh/ssh_host_ed25519_key.pub";
   try {
-    return keyscanKey(`host ${readFileSync57(file4, "utf8")}`);
+    return keyscanKey(`host ${readFileSync58(file4, "utf8")}`);
   } catch {
     return void 0;
   }
@@ -66838,7 +67187,7 @@ function readHostKey(env, platform2) {
 var readText2 = (file4) => {
   if (file4 === void 0) return void 0;
   try {
-    return readFileSync57(file4, "utf8");
+    return readFileSync58(file4, "utf8");
   } catch {
     return void 0;
   }
@@ -66948,7 +67297,8 @@ async function runRelayCommand(o2) {
     return 0;
   }
   if (sub === "install" && args.length === 0) {
-    const pair = o2.values.pair === void 0 ? void 0 : parsePairLine(o2.values.pair);
+    const pairText = o2.values.pair === "-" ? (await readAll(o2.stdin)).trim().split(/\r?\n/)[0] ?? "" : o2.values.pair;
+    const pair = pairText === void 0 ? void 0 : parsePairLine(pairText);
     return await install({
       ...o2,
       home,
@@ -66962,9 +67312,18 @@ async function runRelayCommand(o2) {
         machine,
         relayUser,
         install: i2,
-        lockdown: await relayLockdown({ ...o2, home, machine, exec: o2.exec ?? systemExec })
+        lockdown: await relayLockdown({
+          ...o2,
+          home,
+          machine,
+          exec: o2.exec ?? systemExec,
+          ...pair === void 0 ? {} : { extra: pair.deny }
+        })
       })
     });
+  }
+  if (sub === "update-deny" && args.length === 1) {
+    return await updateDeny({ ...o2, home, machine, line: args[0] });
   }
   if (sub === "uninstall" && args.length === 0) {
     return await uninstall({ ...o2, home: o2.values.home, machine, relayUser: o2.values.user });
@@ -66987,6 +67346,9 @@ async function runRelayCommand(o2) {
     );
     return 0;
   }
+  if (sub === "pair" && o2.values["update-deny"] === true && args.length === 1) {
+    return await pairUpdateDeny({ ...o2, label: args[0] });
+  }
   if (sub === "pair" && o2.values.connect !== true && args.length === 2) {
     return await pairStart({ ...o2, label: args[0], host: args[1] });
   }
@@ -66994,6 +67356,101 @@ async function runRelayCommand(o2) {
     return await pairConnect({ ...o2, label: args[0] });
   }
   return void 0;
+}
+async function pairUpdateDeny(o2) {
+  if (!WORKER_LABEL_RE.test(o2.label))
+    throw new Error("relay pair: a label is ^[a-z][a-z0-9-]{0,31}$");
+  const target = loadOwnerConfig(o2.owner).workers?.relay[o2.label];
+  if (target === void 0) {
+    throw new Error(
+      `${o2.label} is not a paired relay worker here: studio relay pair ${o2.label} <host>, then --connect`
+    );
+  }
+  const t = setupText({ owner: o2.owner, env: o2.env });
+  const lead = leadDenyFor(stateBaseFor(o2.owner), o2.label);
+  for (const p of lead.problems) o2.stdout(`${t.pairDenyProblem(p)}
+`);
+  if (o2.values["dry-run"] === true) {
+    o2.stdout(`${t.dryRun}
+`);
+    o2.stdout(
+      `${t.would(`sign the deny list of your projects for ${o2.label} (${denyText(lead.deny)}) with ${target.identityFile} and print the line for the PC`)}
+`
+    );
+    return 0;
+  }
+  const issuedAt = Math.floor(o2.ports.clock.now().getTime() / 1e3);
+  const message = denyUpdateMessage(o2.label, lead.deny, issuedAt);
+  const signed = await (o2.exec ?? systemExec)(
+    "ssh-keygen",
+    ["-Y", "sign", "-f", target.identityFile, "-n", DENY_NAMESPACE],
+    { input: message }
+  );
+  if (signed.code === 127) throw new Error(missingSsh("ssh-keygen", void 0));
+  if (signed.code !== 0) {
+    throw new Error(
+      `ssh-keygen could not sign with ${target.identityFile}: ${signed.stderr.trim()}`
+    );
+  }
+  const line4 = renderDenyUpdate({
+    label: o2.label,
+    deny: lead.deny,
+    issuedAt,
+    signature: sshsigBlob(signed.stdout)
+  });
+  const pf = "[Environment]::GetFolderPath('ProgramFiles')";
+  o2.stdout(
+    [
+      t.updateDenyPc,
+      `  & (Join-Path (${pf}) 'Studio\\relay\\node\\node.exe') (Join-Path (${pf}) 'Studio\\relay\\studio\\bin\\studio') relay update-deny '${line4}'`,
+      t.updateDenyWhat(denyText(lead.deny)),
+      ""
+    ].join("\n")
+  );
+  return 0;
+}
+async function updateDeny(o2) {
+  const u2 = parseDenyUpdate(o2.line);
+  const problem = denyUpdateProblem(u2, readPairings(o2.machine)[u2.label]?.key, o2.ports.clock.now());
+  if (problem !== void 0) throw new Error(problem);
+  const t = setupText({ owner: o2.owner, env: o2.env });
+  const record2 = readInstallRecord(o2.machine);
+  if (o2.values["dry-run"] === true) {
+    o2.stdout(`${t.dryRun}
+`);
+    o2.stdout(
+      `${t.would(`add ${denyText(u2.deny)} to workers.serve.deny and write the firewall rules of the lockdown anew, elevated`)}
+`
+    );
+    return 0;
+  }
+  await windowsAdmin({ ...o2, what: "update-deny" });
+  if (record2 === void 0)
+    throw new Error("no install record here: run studio relay install first");
+  const config2 = join64(machineConfig(o2.machine), "studio", "config.yaml");
+  if (record2.firewall !== false) {
+    const plan = await relayLockdown({ ...o2, exec: o2.exec ?? systemExec, extra: u2.deny });
+    if (plan !== null) {
+      const r = await runScript(
+        o2.exec ?? systemExec,
+        relayDenyScript({
+          machine: o2.machine,
+          relayUser: record2.relayUser ?? "studio-relay",
+          crewPrefix: record2.crewPrefix ?? "studio-crew",
+          lockdown: plan
+        }),
+        o2.stdout
+      );
+      if (r.code !== 0) {
+        o2.stderr("studio: relay update-deny stopped; nothing was added to workers.serve.deny\n");
+        return 1;
+      }
+    }
+  }
+  const added = addToServeDeny(config2, u2.deny, DEFAULT_SERVE_CONFIG);
+  o2.stdout(`${t.denyUpdated(denyText(added), record2.firewall !== false)}
+`);
+  return 0;
 }
 var STDIN_RUNNER = Buffer.from(
   "$s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())); try { & ([ScriptBlock]::Create($s)) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
@@ -67052,7 +67509,7 @@ function setupScriptFor(o2) {
     task: settings.windows?.broker ?? "Studio relay broker",
     // Node.js, Studio and the plugins are read from the admin-only tree; these are the rest.
     readPaths: [
-      ...claude === void 0 ? [] : [dirname21(claude)],
+      ...claude === void 0 ? [] : [dirname22(claude)],
       ...loadOwnerConfig(o2.owner).crewToolchainPaths
     ],
     // Node.js for all users, where only administrators change it: never the node this CLI runs on,
@@ -67063,7 +67520,7 @@ function setupScriptFor(o2) {
         "nodejs",
         "node.exe"
       ),
-      studio: resolve15(dirname21(STUDIO_BIN), "..")
+      studio: resolve15(dirname22(STUDIO_BIN), "..")
     },
     ...o2.install === void 0 ? {} : { install: o2.install },
     lockdown: o2.lockdown
@@ -67071,8 +67528,13 @@ function setupScriptFor(o2) {
 }
 async function relayLockdown(o2) {
   if (o2.values["no-firewall"] === true) return null;
+  const own2 = serveSettings(relayOwner(o2.owner, o2.home, o2.machine)).deny;
+  const set2 = unionDeny(
+    { hosts: own2.hosts ?? [], ports: own2.ports, prefixes: own2.prefixes ?? [] },
+    o2.extra ?? EMPTY_DENY
+  );
   return lockdownFor({
-    deny: serveSettings(relayOwner(o2.owner, o2.home, o2.machine)).deny,
+    deny: set2,
     blockSmbLan: o2.values["block-smb-lan"] === true
   });
 }
@@ -67106,7 +67568,7 @@ async function syncAuthorizedKeys(o2) {
   const file4 = authorizedKeysFile(o2.machine);
   let existing;
   try {
-    existing = readFileSync57(file4, "utf8");
+    existing = readFileSync58(file4, "utf8");
   } catch {
     existing = void 0;
   }
@@ -67205,11 +67667,10 @@ async function install(o2) {
     return 1;
   }
   const config2 = join64(machineConfig(o2.machine), "studio", "config.yaml");
-  if (!existsSync19(config2)) {
-    mkdirSync13(dirname21(config2), { recursive: true });
-    const tmp = `${config2}.${process.pid}.tmp`;
-    writeFileSync21(tmp, DEFAULT_SERVE_CONFIG, { flag: "wx" });
-    renameSync16(tmp, config2);
+  const added = addToServeDeny(config2, o2.pair?.deny ?? EMPTY_DENY, DEFAULT_SERVE_CONFIG);
+  if (added.hosts.length + added.ports.length + added.prefixes.length > 0) {
+    o2.stdout(`${t.installDenyAdded(denyText(added))}
+`);
   }
   if (o2.pair !== void 0) {
     writePairings(o2.machine, {
@@ -67217,7 +67678,8 @@ async function install(o2) {
       [o2.pair.label]: {
         key: o2.pair.key,
         secret: o2.pair.secret,
-        pairedAt: o2.ports.clock.now().toISOString()
+        pairedAt: o2.ports.clock.now().toISOString(),
+        denyDigest: denyDigest(o2.pair.deny)
       }
     });
   }
@@ -67244,7 +67706,7 @@ function installPlan(o2) {
     `register the broker tasks; stop and disable WebClient${o2.values["disable-spooler"] === true ? " and the print spooler" : ""}`,
     "install the pinned plugins for crews",
     `write the sshd block (checked with sshd -t), start sshd on port ${port}, reachable only from ${scope}${o2.values["keep-passwords"] === true ? "" : "; keys only for every account"}`,
-    o2.pair === void 0 ? "authorize the leads of the recorded pairings only" : `record the pairing of ${o2.pair.label} and authorize its key`,
+    o2.pair === void 0 ? "authorize the leads of the recorded pairings only" : `record the pairing of ${o2.pair.label} and authorize its key; add the deny list of the lead's projects (${denyText(o2.pair.deny)}) to workers.serve.deny and to the firewall rules`,
     "print the host key fingerprint"
   ];
 }
@@ -67291,7 +67753,7 @@ async function uninstall(o2) {
       recordedHome: record2?.home,
       defaultHome: relayHomeDefault(o2.env),
       defaultMachine: relayMachineDefault(o2.env),
-      machineMarked: existsSync19(installRecordFile(o2.machine))
+      machineMarked: existsSync20(installRecordFile(o2.machine))
     });
     if (problem !== void 0) {
       throw new Error(
@@ -67353,7 +67815,7 @@ async function unpair(o2) {
 }
 var missingSsh = (tool, platform2) => `${tool} is not installed here: ${installCommand("ssh", leadKind(platform2 ?? detectPlatform()))}, then run this again`;
 function leadFilesProblem(owner, key, platform2) {
-  for (const dir of [dirname21(key), join64(ownerStateRootFor(owner), "relay")]) {
+  for (const dir of [dirname22(key), join64(ownerStateRootFor(owner), "relay")]) {
     if (onWindowsDrive(dir, platform2)) {
       throw new Error(
         `${dir} is on a Windows drive, which keeps no file modes, so ssh would refuse the key: unset XDG_CONFIG_HOME and XDG_STATE_HOME (or point them below ~ in the Linux file system), then run this again`
@@ -67374,18 +67836,21 @@ async function pairStart(o2) {
   const key = leadKeyFile(o2.owner, o2.label);
   leadFilesProblem(o2.owner, key, o2.platform ?? detectPlatform());
   const t = setupText({ owner: o2.owner, env: o2.env });
+  const lead = leadDenyFor(stateBaseFor(o2.owner), o2.label);
   if (o2.values["dry-run"] === true) {
     o2.stdout(`${t.dryRun}
 `);
     o2.stdout(
-      `${t.would(`make the key ${key} (ed25519) for ${user}@${o2.host}:${port} and print the one line for the PC; it waits an hour`)}
+      `${t.would(`make the key ${key} (ed25519) for ${user}@${o2.host}:${port} and print the one line for the PC, with the deny list of your projects for ${o2.label} (${denyText(lead.deny)}); it waits an hour`)}
 `
     );
+    for (const p of lead.problems) o2.stdout(`${t.pairDenyProblem(p)}
+`);
     return 0;
   }
-  mkdirSync13(dirname21(key), { recursive: true, mode: 448 });
-  rmSync13(key, { force: true });
-  rmSync13(`${key}.pub`, { force: true });
+  mkdirSync14(dirname22(key), { recursive: true, mode: 448 });
+  rmSync14(key, { force: true });
+  rmSync14(`${key}.pub`, { force: true });
   const made = await exec("ssh-keygen", [
     "-q",
     "-t",
@@ -67399,7 +67864,7 @@ async function pairStart(o2) {
   ]);
   if (made.code === 127) throw new Error(missingSsh("ssh-keygen", o2.platform));
   if (made.code !== 0) throw new Error("ssh-keygen could not make the key");
-  const pub = readFileSync57(`${key}.pub`, "utf8").trim().split(/\s+/).slice(0, 2).join(" ");
+  const pub = readFileSync58(`${key}.pub`, "utf8").trim().split(/\s+/).slice(0, 2).join(" ");
   const secret = newPairSecret();
   writePending(o2.owner, {
     label: o2.label,
@@ -67408,15 +67873,19 @@ async function pairStart(o2) {
     user,
     secret,
     identityFile: key,
-    createdAt: o2.ports.clock.now().toISOString()
+    createdAt: o2.ports.clock.now().toISOString(),
+    deny: lead.deny
   });
-  const line4 = renderPairLine({ label: o2.label, secret, key: pub });
+  const line4 = renderPairLine({ label: o2.label, secret, key: pub, deny: lead.deny });
+  for (const p of lead.problems) o2.stdout(`${t.pairDenyProblem(p)}
+`);
   o2.stdout(
     [
       `1. ${t.pairPc}`,
       `   ${bootstrapCommand({ pair: line4 })}`,
       `   ${t.pairWhat(STUDIO_VERSION)}`,
-      `   ${t.pairHasStudio(`studio relay install --pair "${line4}"`)}`,
+      `   ${t.pairDeny(denyText(lead.deny))}`,
+      `   ${t.pairHasStudio(`'${line4}' | studio relay install --pair -`)}`,
       `2. ${t.pairThen(`studio relay pair ${o2.label} --connect`)}`,
       t.pairSecret,
       ""
@@ -67468,9 +67937,9 @@ async function pairConnect(o2) {
   const { answer: answer2 } = await relayCall(transport, "hello", {}, { timeoutMs: 6e4 });
   if (!answer2.ok) throw new Error(`the worker answered: ${answer2.line}`);
   const proof = answer2.pairProofs.find((x) => x.label === o2.label);
-  if (proof === void 0 || !proofHolds(p.secret, key, proof.mac)) {
+  if (proof === void 0 || !proofHolds(p.secret, key, proof.mac, denyDigest(p.deny ?? EMPTY_DENY))) {
     throw new Error(
-      `the worker did not prove this host key with the pairing's secret: nothing was pinned. Run studio relay install --pair with the line studio relay pair printed, within the hour, on the worker itself`
+      `the worker did not prove this host key and the deny list of the line with the pairing's secret: nothing was pinned. Run studio relay install --pair with the whole line studio relay pair printed, within the hour, on the worker itself`
     );
   }
   writeRelayTarget(o2.owner, o2.label, {
@@ -67510,15 +67979,15 @@ async function pairConnect(o2) {
 import {
   chmodSync as chmodSync6,
   lstatSync as lstatSync47,
-  mkdirSync as mkdirSync14,
-  readFileSync as readFileSync58,
-  renameSync as renameSync17,
-  rmSync as rmSync14,
+  mkdirSync as mkdirSync15,
+  readFileSync as readFileSync59,
+  renameSync as renameSync18,
+  rmSync as rmSync15,
   statSync as statSync8,
-  writeFileSync as writeFileSync22
+  writeFileSync as writeFileSync23
 } from "node:fs";
 import { homedir as homedir14 } from "node:os";
-import { dirname as dirname22, join as join65, resolve as resolve16 } from "node:path";
+import { dirname as dirname23, join as join65, resolve as resolve16 } from "node:path";
 var DEFAULT_LABEL2 = "main";
 var MAX_LABEL = 32;
 var LOOKS_LIKE_TOKEN = /^(sk-ant|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)/;
@@ -67574,13 +68043,13 @@ function studioOnPath(env) {
 }
 var yes = (answer2) => /^(|y|yes|j|ja)$/i.test(answer2.trim());
 function writeAtomic2(file4, text2, mode) {
-  const tmp = join65(dirname22(file4), `.studio-${process.pid}-${Date.now()}.tmp`);
+  const tmp = join65(dirname23(file4), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
-    writeFileSync22(tmp, text2, { flag: "wx", mode });
+    writeFileSync23(tmp, text2, { flag: "wx", mode });
     chmodSync6(tmp, mode);
-    renameSync17(tmp, file4);
+    renameSync18(tmp, file4);
   } catch (e) {
-    rmSync14(tmp, { force: true });
+    rmSync15(tmp, { force: true });
     throw e;
   }
 }
@@ -67650,13 +68119,13 @@ async function link(o2, home, t) {
   const target = join65(localBin, "studio");
   let current;
   try {
-    current = lstatSync47(target).isFile() ? readFileSync58(target, "utf8") : "";
+    current = lstatSync47(target).isFile() ? readFileSync59(target, "utf8") : "";
   } catch {
     current = void 0;
   }
   const cache2 = join65(ownerConfigDir(o2.owner), "launcher");
   const writeCache = () => {
-    mkdirSync14(dirname22(cache2), { recursive: true, mode: 448 });
+    mkdirSync15(dirname23(cache2), { recursive: true, mode: 448 });
     writeAtomic2(cache2, `${launcher2}
 `, 384);
   };
@@ -67685,7 +68154,7 @@ async function link(o2, home, t) {
     say(t.nothingWritten(run2));
     return 0;
   }
-  mkdirSync14(localBin, { recursive: true });
+  mkdirSync15(localBin, { recursive: true });
   writeCache();
   writeAtomic2(target, SHIM, 493);
   say(t.wrote(target));
@@ -67993,7 +68462,7 @@ async function runSetup(o2) {
 }
 
 // src/skills-check.ts
-import { existsSync as existsSync20, lstatSync as lstatSync48, readFileSync as readFileSync59 } from "node:fs";
+import { existsSync as existsSync21, lstatSync as lstatSync48, readFileSync as readFileSync60 } from "node:fs";
 import { join as join66 } from "node:path";
 var SKILLS_CHECK_DAYS = 30;
 var DAY_MS6 = 864e5;
@@ -68006,7 +68475,7 @@ function readRecord(stateRoot) {
   try {
     assertStatePath(stateRoot, file4);
     if (!lstatSync48(file4).isFile()) return {};
-    const raw = JSON.parse(readFileSync59(file4, "utf8"));
+    const raw = JSON.parse(readFileSync60(file4, "utf8"));
     const lastRun2 = at(raw.lastRun);
     const lastAttempt = at(raw.lastAttempt);
     return {
@@ -68147,7 +68616,7 @@ async function runSkillsCheck(o2) {
   let offered = /* @__PURE__ */ new Map();
   const { dir, runEnv } = pluginEnv(o2.owner, o2.env);
   if (o2.ports.plugins === void 0) fail4("plugins: no claude command available");
-  else if (!existsSync20(dir)) {
+  else if (!existsSync21(dir)) {
     fail4("plugins: the crew config dir is missing; run studio account setup-plugins");
   } else {
     try {
@@ -68431,11 +68900,12 @@ async function runCli(argv, deps) {
       values["force-stop"],
       values["keep-tree"],
       values["force-path"],
-      values["block-smb-lan"]
+      values["block-smb-lan"],
+      values["update-deny"]
     ];
     if (relayOnly.some((v) => v !== void 0) && cmd !== "relay") {
       throw new UsageError(
-        "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop, --keep-tree, --force-path and --block-smb-lan work with relay only"
+        "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop, --keep-tree, --force-path, --block-smb-lan and --update-deny work with relay only"
       );
     }
     if (values["no-firewall"] !== void 0 && cmd !== "relay" && cmd !== "worker") {
@@ -68538,11 +69008,11 @@ async function runCli(argv, deps) {
       }
     };
     const dailyCostHold = async (config2, ownerConfig) => {
-      const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname23(ownerRoot()))])];
+      const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname24(ownerRoot()))])];
       if (!readOnly) await recordAllEnded(roots, ownerConfig);
       return costHold({
         stateRoot: stateRoot(),
-        stateBase: dirname23(ownerRoot()),
+        stateBase: dirname24(ownerRoot()),
         config: config2,
         ownerConfig,
         now: ports.clock.now()
@@ -68551,7 +69021,7 @@ async function runCli(argv, deps) {
     const recordAllEnded = async (roots, ownerConfig) => {
       for (const root of roots) {
         try {
-          if (existsSync21(root)) {
+          if (existsSync22(root)) {
             await recordEndedRuns(root, ports, ownerConfig.crewLabelLimits.timezone);
           }
         } catch {
@@ -68843,7 +69313,7 @@ async function runCli(argv, deps) {
       const { config: config2 } = loadAll();
       refuseNativeQueue(config2);
       const root = await boundStateRoot();
-      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname23(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname24(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
       const blockedNow = queueHold();
       if (blockedNow !== void 0) throw new HeldError(blockedNow);
       let heldLine;
@@ -69142,8 +69612,8 @@ async function runCli(argv, deps) {
       const relayed = item.runsOn !== void 0 && isRelayItem(loadOwnerConfig(owner), item);
       if (relayed) {
         const file4 = relayReportFile(stateRoot(), item.id);
-        if (!existsSync21(file4)) throw new Error(`${item.id}: no relay result yet; nothing moved`);
-        report = parseReport(readFileSync60(file4, "utf8"), item);
+        if (!existsSync22(file4)) throw new Error(`${item.id}: no relay result yet; nothing moved`);
+        report = parseReport(readFileSync61(file4, "utf8"), item);
         fileName = `relay/${item.id}.report.md`;
       } else if (item.runsOn !== void 0) {
         const got = await workerReport(item);
@@ -70013,7 +70483,7 @@ async function runCli(argv, deps) {
       const cachePhase = async () => {
         const now = ports.clock.now();
         const removed = await cacheCleanup({
-          stateBase: dirname23(root),
+          stateBase: dirname24(root),
           ownerRoot: ownerRoot(),
           ownerConfig: loadOwnerConfig(owner),
           now
@@ -70380,7 +70850,7 @@ async function runCli(argv, deps) {
     const tickPreview = async () => {
       const now = ports.clock.now();
       const root = stateRoot();
-      const rootExists = existsSync21(root);
+      const rootExists = existsSync22(root);
       const why = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ");
       const out = { dryRun: true, needsLead: [], held: [], errors: [] };
       const lead = (item, reason) => {
@@ -71403,7 +71873,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
             hasReport: (item) => {
               if (!isItemId(item)) return false;
               const name = reportName(root, item);
-              return name !== void 0 && existsSync21(join67(root, "clones", item, ".studio", "reports", name));
+              return name !== void 0 && existsSync22(join67(root, "clones", item, ".studio", "reports", name));
             }
           }
         );
@@ -71920,7 +72390,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
           throw new UsageError("accounts-clear needs exactly one valid label");
         }
         await boundStateRoot();
-        await recordAllEnded(projectStateRoots(dirname23(ownerRoot())), loadOwnerConfig(owner));
+        await recordAllEnded(projectStateRoots(dirname24(ownerRoot())), loadOwnerConfig(owner));
         const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
@@ -72599,7 +73069,8 @@ function parseCli(argv) {
         "keep-tree": { type: "boolean" },
         "no-firewall": { type: "boolean" },
         "force-path": { type: "boolean" },
-        "block-smb-lan": { type: "boolean" }
+        "block-smb-lan": { type: "boolean" },
+        "update-deny": { type: "boolean" }
       },
       allowPositionals: true,
       strict: true
@@ -73071,7 +73542,7 @@ function readVisibleLine(prompt, input2, output2) {
 
 // src/ports.ts
 import { spawn as spawn7 } from "node:child_process";
-import { closeSync as closeSync10, openSync as openSync10, readFileSync as readFileSync61 } from "node:fs";
+import { closeSync as closeSync10, openSync as openSync10, readFileSync as readFileSync62 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 var HTTP_TIMEOUT_MS = 15e3;
 var realHttp = {
@@ -73199,7 +73670,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync61(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync62(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }

@@ -341,19 +341,44 @@ const SYSTEM_TOOLS = new Set([
   'whoami',
 ]);
 
+let windowsDir: string | undefined;
+
+/**
+ * The Windows folder of this machine, from the kernel's own link `\\SystemRoot` (opened as
+ * `\\?\GLOBALROOT\SystemRoot` and resolved to its drive path), never from `SystemRoot` or
+ * `windir` of the environment, which any process of the user can set. Throws when it cannot be
+ * resolved: nothing is started by a guessed path.
+ */
+export function windowsDirectory(): string {
+  if (windowsDir !== undefined) return windowsDir;
+  let real: string;
+  try {
+    real = realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot');
+  } catch (e) {
+    throw new Error(`cannot resolve the Windows folder (\\SystemRoot): ${(e as Error).message}`);
+  }
+  const dos = real.replace(/^\\\\\?\\/, '');
+  if (!/^[A-Za-z]:\\[^\\/:*?"<>|]+$/.test(dos)) {
+    throw new Error(`the Windows folder resolves to ${real}, not a folder on a drive`);
+  }
+  windowsDir = dos;
+  return dos;
+}
+
 /**
  * The absolute path of a Windows system tool named bare: Node's spawn on Windows looks in the
  * working directory first, so a powershell.exe planted in a download folder would run (with
- * the rights of an elevated install). Anything else, and every other platform, as given.
+ * the rights of an elevated install). Anything else, and every other platform, as given. The
+ * Windows folder is the machine's (`windowsDirectory`); tests hand in their own.
  */
 export function systemTool(
   file: string,
-  env: Record<string, string | undefined> = process.env,
+  windows: () => string = windowsDirectory,
   platform: NodeJS.Platform = process.platform,
 ): string {
   if (platform !== 'win32') return file;
   const name = file.toLowerCase().replace(/\.exe$/, '');
-  const sys = win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows', 'System32');
+  const sys = win32.join(windows(), 'System32');
   if (name === 'powershell') return win32.join(sys, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return SYSTEM_TOOLS.has(name) ? win32.join(sys, `${name}.exe`) : file;
 }

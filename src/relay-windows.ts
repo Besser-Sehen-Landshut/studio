@@ -578,6 +578,48 @@ ${script.slice(first.length)}`;
 }
 
 /**
+ * The elevated script of `studio relay update-deny`: only the firewall rules of the lockdown, from
+ * `lockdown` (the worker's deny list with the lead's additions), for the relay account and the crew
+ * users' group an install made; the deny.hosts names go into the install record for the drift
+ * check. Refused while a relay job runs (the rules are rewritten), and on a machine without an
+ * install.
+ */
+export function relayDenyScript(o: {
+  machine: string;
+  relayUser: string;
+  crewPrefix: string;
+  lockdown: LockdownPlan;
+}): string {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o.relayUser))
+    throw new Error(`not a user name: ${o.relayUser}`);
+  return withSteps(`#Requires -RunAsAdministrator
+$ErrorActionPreference = 'Stop'
+${MACHINE_PATH}$relay = ${psQuote(o.relayUser)}
+$machine = ${psQuote(o.machine)}
+${crewAccountFunctions(o.crewPrefix, { treeSource: brokerPlaces(o.machine).treeSource, treeTemp: brokerPlaces(o.machine).treeTemp })}${relayJobFunctions({ relayUser: o.relayUser, crewPrefix: o.crewPrefix, forceStop: false, what: 'update-deny' })}Step 'no relay job may run while the rules are rewritten'
+NoRelayJob
+Step 'the relay account and the group of the crew users of the install'
+$u = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
+if ($null -eq $u -or $u.Description -ne 'Studio relay (SSH, forced command)') { throw "there is no relay account $relay that Studio made here: run studio relay install first" }
+$relaySid = $u.SID.Value
+$group = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
+if ($null -eq $group -or $group.Description -ne $groupDescription) { throw "there is no group of crew users $($prefix)s that Studio made here: run studio relay install first" }
+$groupSid = $group.SID.Value
+Step 'network lockdown'
+${lockdownSection(o.lockdown, '@($relaySid, $groupSid)')}Step 'the install record: the deny.hosts names and their addresses'
+$recordFile = ${psQuote(installRecordFile(o.machine))}
+$rec = Get-Content -Raw -LiteralPath $recordFile | ConvertFrom-Json
+$rec | Add-Member -NotePropertyName lockdownNames -NotePropertyValue (ConvertFrom-Json ${psQuote(JSON.stringify(o.lockdown.names))}) -Force
+$tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+[IO.File]::WriteAllText($tmp, (ConvertTo-Json -Compress -Depth 6 $rec), (New-Object Text.ASCIIEncoding))
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $recordFile" }
+[IO.File]::Replace($tmp, $recordFile, [NullString]::Value)
+icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
+`);
+}
+
+/**
  * PowerShell function `SshdConfigSwap $conf $text $mustTest`: the new sshd_config goes to a
  * temporary file beside it, sshd checks that file (`sshd -t -f`, with a throwaway host key when
  * the machine has none yet), and only a config sshd accepts replaces the old one, in one step
@@ -590,7 +632,7 @@ export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [stri
   $keyDir = $null
   [IO.File]::WriteAllText($tmp, $text, (New-Object Text.UTF8Encoding $false))
   try {
-    $exe = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
+    $exe = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\OpenSSH\sshd.exe'
     if (Test-Path -LiteralPath $exe) {
       $sshdArgs = '-t -f "' + $tmp + '"'
       if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
@@ -605,7 +647,7 @@ export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [stri
         $made = Get-Item -LiteralPath $keyDir -Force
         if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
         $key = Join-Path $keyDir 'host_ed25519'
-        $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
+        $kg = Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
         if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
         $sshdArgs += ' -h "' + $key + '"'
       }
@@ -792,7 +834,7 @@ function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Mach
 # winget from its package in Program Files (administrators only), never the alias in the user's
 # WindowsApps folder.
 function Winget {
-  $apps = Join-Path $env:ProgramFiles 'WindowsApps'
+  $apps = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsApps'
   @(Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe' -ErrorAction SilentlyContinue |
     Sort-Object { try { [version]($_.Name.Split('_')[1]) } catch { [version]'0.0' } } -Descending |
     ForEach-Object { Join-Path $_.FullName 'winget.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
@@ -807,7 +849,7 @@ function Need([string]$what, [scriptblock]$have, [string]$id) {
   if (-not (& $have)) { throw "$what is still missing after winget install $id; install it for all users by hand" }
 }
 Step 'prerequisites: Git, Claude Code, the OpenSSH server'
-Need 'Git' { Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
+Need 'Git' { Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
@@ -856,7 +898,7 @@ KbdInteractiveAuthentication no
 # studio relay end global
 `;
   return `Step 'sshd: its block (checked with sshd -t), the firewall rule, start'
-$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
+$conf = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ssh\\sshd_config'
 if (-not (Test-Path -LiteralPath $conf)) {
   # The first start of sshd writes its default config; it stays stopped afterwards.
   Start-Service sshd

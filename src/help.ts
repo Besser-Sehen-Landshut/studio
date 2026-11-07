@@ -93,15 +93,20 @@ export const COMMANDS: HelpEntry[] = [
       "On the lead: print the line that removes a Windows relay worker with the bootstrap of this Studio's release, checked against this Studio",
   },
   {
+    usage: 'relay pair <label> --update-deny [--dry-run]',
+    about:
+      "On the lead: print the line that adds the deny list of your projects for that worker to it (signed with the lead's key for it; no new pairing)",
+  },
+  {
     usage: 'relay pair <label> --connect [--dry-run]',
     about:
       'On the lead: pin the host key the worker proves with the pairing secret; write workers.relay.<label>',
   },
   {
     usage:
-      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--block-smb-lan] [--i-am-local] [--force-stop] [--dry-run]',
+      'relay install [--pair <line> | --pair -] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--block-smb-lan] [--i-am-local] [--force-stop] [--dry-run]',
     about:
-      'On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead',
+      'On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead and adds its deny list (--pair -: the line on stdin)',
   },
   {
     usage:
@@ -112,6 +117,11 @@ export const COMMANDS: HelpEntry[] = [
   {
     usage: 'relay unpair <label> [--home <dir>] [--dry-run]',
     about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key",
+  },
+  {
+    usage: 'relay update-deny <line> [--dry-run]',
+    about:
+      "On a Windows worker, elevated: take a line of relay pair <label> --update-deny, checked against that lead's key; add its deny list to workers.serve.deny and write the firewall rules anew",
   },
   {
     usage: 'relay setup [--home <dir>] [--user <name>] [--no-firewall]',

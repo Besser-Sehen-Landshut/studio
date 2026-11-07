@@ -147,6 +147,12 @@ export interface SetupStrings {
   pairHasStudio: (command: string) => string;
   pairThen: (command: string) => string;
   pairSecret: string;
+  pairDeny: (set: string) => string;
+  pairDenyProblem: (problem: string) => string;
+  updateDenyPc: string;
+  updateDenyWhat: (set: string) => string;
+  denyUpdated: (added: string, rules: boolean) => string;
+  installDenyAdded: (added: string) => string;
   paired: (
     label: string,
     where: string,

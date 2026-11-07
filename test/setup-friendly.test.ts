@@ -91,7 +91,7 @@ describe('--dry-run of the relay commands: what they would do, nothing done', ()
     expect(p.code).toBe(0);
     expect(p.ran).toEqual([]);
     expect(p.out).toContain('would make the key');
-    expect(p.out).not.toMatch(/studio-pair-1/);
+    expect(p.out).not.toMatch(/studio-pair-2/);
     expect(existsSync(join(p.home, '.config', 'studio', 'relay'))).toBe(false);
   });
 
@@ -154,7 +154,7 @@ describe('--dry-run of the relay commands: what they would do, nothing done', ()
     const text = out.join('');
     expect(text).toContain('1. Auf dem Windows-PC, in einer PowerShell als Administrator');
     expect(text).toContain("studio-relay-bootstrap.ps1').RawContentStream.ToArray()");
-    expect(text).toContain("-Pair 'studio-pair-1 lab ");
+    expect(text).toContain("-Pair 'studio-pair-2 lab ");
     expect(text).toContain('2. Danach hier: studio relay pair lab --connect');
   });
 });

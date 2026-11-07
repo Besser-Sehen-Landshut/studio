@@ -473,6 +473,16 @@ export default defineLocale({
       pairHasStudio: (command) => `Ist Studio dort schon installiert: ${command}`,
       pairThen: (command) => `Danach hier: ${command}`,
       pairSecret: 'Die Zeile enthält ein Einmal-Geheimnis: nur auf dem Worker einfügen.',
+      pairDeny: (set) =>
+        `Sie trägt die Sperrliste der Projekte für diesen Worker (${set}); der Worker sperrt sie in seiner Firewall.`,
+      pairDenyProblem: (problem) => `Hinweis: ${problem} (seine Sperrliste ist nicht in der Zeile)`,
+      updateDenyPc:
+        'Auf dem Windows-PC, in einer PowerShell als Administrator (am PC oder per Remotedesktop, nie per SSH), innerhalb eines Tages:',
+      updateDenyWhat: (set) =>
+        `Sie ergänzt die Sperrliste der Projekte (${set}) in workers.serve.deny des Workers und schreibt seine Firewall-Regeln neu; sie entfernt nichts und koppelt nichts.`,
+      denyUpdated: (added, rules) =>
+        `Fertig. workers.serve.deny: ${added === 'nothing' ? 'nichts Neues' : `ergänzt um ${added}`}${rules ? '; die Firewall-Regeln halten es' : ' (keine Sperre hier: --no-firewall)'}. Relay-Starts gehen weiter.`,
+      installDenyAdded: (added) => `workers.serve.deny: ${added} aus der Kopplungszeile ergänzt`,
       paired: (label, where, studio, platform, fp) =>
         `gekoppelt: ${label} ist ${where}, Studio ${studio} auf ${platform}, Host-Schlüssel festgelegt (${fp}).`,
       installWebClient:

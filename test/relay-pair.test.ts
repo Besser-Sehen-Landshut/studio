@@ -16,6 +16,7 @@ import { loadOwnerConfig } from '../src/config.js';
 import { pinnedPlugins, STUDIO_VERSION } from '../src/plugins.js';
 import { realPorts } from '../src/ports.js';
 import { type Exec, relayContext, runRelayCommand } from '../src/relay-command.js';
+import { EMPTY_DENY } from '../src/relay-deny-sync.js';
 import {
   authorizedKeysPlan,
   keyFingerprint,
@@ -67,13 +68,13 @@ async function* chunks(lines: Iterable<string>): AsyncGenerator<string> {
 }
 
 describe('pairing lines, fingerprints and proofs', () => {
-  it('a line holds the label, the secret and the key, and nothing else parses', () => {
+  it('a line holds the label, the secret, the key and the deny set, and nothing else parses', () => {
     const key = newKey();
-    const line = renderPairLine({ label: 'lab', secret: SECRET, key });
-    expect(parsePairLine(line)).toEqual({ label: 'lab', secret: SECRET, key });
+    const line = renderPairLine({ label: 'lab', secret: SECRET, key, deny: EMPTY_DENY });
+    expect(parsePairLine(line)).toEqual({ label: 'lab', secret: SECRET, key, deny: EMPTY_DENY });
     for (const bad of [
       `${line} extra`,
-      line.replace('studio-pair-1', 'studio-pair-2'),
+      line.replace('studio-pair-2', 'studio-pair-1'),
       line.replace(SECRET, 'short'),
       line.replace('lab', 'Lab'),
     ]) {
@@ -338,7 +339,9 @@ describe('studio relay pair on the lead', () => {
       });
     /** The worker takes the line printed last (or another secret). */
     const workerTakes = () => {
-      const line = /--pair "([^"]+)"/.exec(out.join(''))?.[1] as string;
+      const line = /'(studio-pair-2 [^']+)' \| studio relay install --pair -/.exec(
+        out.join(''),
+      )?.[1] as string;
       const p = parsePairLine(line);
       secret = o.workerSecret?.(p.secret) ?? p.secret;
       return p;
@@ -454,7 +457,7 @@ describe('the install script', () => {
     ).toContain('$forceStop = $true');
     for (const s of [
       // Git from Program Files, winget from its package there, the machine's PATH alone.
-      "Need 'Git' { Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'",
+      "Need 'Git' { Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'",
       '& $wg install --id $id --exact --silent --scope machine',
       "Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe'",
       "function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') }",
@@ -462,7 +465,7 @@ describe('the install script', () => {
       'Add-WindowsCapability -Online -Name $ssh.Name',
       '# studio relay begin',
       '# studio relay end',
-      "$exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'",
+      "$exe = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\\OpenSSH\\sshd.exe'",
       // The new config goes to a temporary file, sshd checks that one (with a throwaway host key
       // when there is none), and only an accepted one replaces the old in one step.
       "$tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')",
