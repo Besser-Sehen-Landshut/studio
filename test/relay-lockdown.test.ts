@@ -13,7 +13,9 @@ import { realPorts } from '../src/ports.js';
 import { type Exec, runRelayCommand } from '../src/relay-command.js';
 import {
   CONNECT_TEST,
+  denyNameDrift,
   dnsResolvers,
+  inLocalRange,
   LOCKDOWN_GROUP,
   lockdownFor,
   lockdownPlan,
@@ -22,7 +24,7 @@ import {
   PROBE_FIXED,
   unrefused,
 } from '../src/relay-lockdown.js';
-import { relayUninstallScript, restoreSteps } from '../src/relay-uninstall.js';
+import { parseInstallRecord, relayUninstallScript, restoreSteps } from '../src/relay-uninstall.js';
 import { relaySetupScript } from '../src/relay-windows.js';
 import { powershellEnv, runFile, windowsSetupScript } from '../src/windows-sandbox.js';
 
@@ -108,6 +110,61 @@ describe('the lockdown plan', () => {
     expect(await dnsResolvers(async () => ({ code: 0, stdout: `"${ipv4(10, 0, 0, 2)}"` }))).toEqual(
       [ipv4(10, 0, 0, 2)],
     );
+  });
+});
+
+describe('names of deny.hosts', () => {
+  it('the plan keeps each name with the addresses its rule holds; the install records them', () => {
+    const p = lockdownPlan({
+      resolvers: [],
+      denyHosts: ['nas.example', 'gone.example'],
+      resolved: { 'nas.example': [ipv4(198, 51, 100, 9)] },
+      denyPorts: [],
+    });
+    expect(p.names).toEqual({ 'nas.example': [ipv4(198, 51, 100, 9)], 'gone.example': [] });
+    const s = relaySetupScript({
+      relayUser: 'studio-relay',
+      crewPrefix: 'studio-crew',
+      home: 'C:\\h',
+      machine: 'C:\\m',
+      task: 'Studio relay broker',
+      readPaths: [],
+      source: { node: 'C:\\n.exe', studio: 'C:\\s' },
+      lockdown: p,
+    });
+    expect(s).toContain(`lockdownNames = (ConvertFrom-Json '${JSON.stringify(p.names)}')`);
+    expect(
+      parseInstallRecord({
+        version: 1,
+        spoolerDisabled: false,
+        prior: null,
+        lockdownNames: { 'nas.example': ipv4(198, 51, 100, 9), x: null },
+      })?.lockdownNames,
+    ).toEqual({ 'nas.example': [ipv4(198, 51, 100, 9)], x: [] });
+  });
+
+  it('warns when a name moved to an address no rule holds, or came after the install; local ones are held anyway', async () => {
+    const lookup = async (n: string) =>
+      n === 'nas.example'
+        ? [ipv4(198, 51, 100, 9), ipv4(203, 0, 113, 50), ipv4(192, 168, 1, 7)]
+        : [ipv4(198, 51, 100, 9)];
+    const lines = await denyNameDrift({
+      denyHosts: [
+        'local-subnets',
+        ipv4(203, 0, 113, 1),
+        'nas.example',
+        'new.example',
+        'same.example',
+      ],
+      recorded: { 'nas.example': [ipv4(198, 51, 100, 9)], 'same.example': [ipv4(198, 51, 100, 9)] },
+      lookup,
+    });
+    expect(lines).toEqual([
+      `deny.hosts nas.example now resolves to ${ipv4(203, 0, 113, 50)}, which no firewall rule holds: run studio relay install again`,
+      'deny.hosts new.example has no firewall rule yet (added after the install): run studio relay install again',
+    ]);
+    expect(inLocalRange(ipv4(100, 100, 100, 100))).toBe(true);
+    expect(inLocalRange(ipv4(9, 9, 9, 9))).toBe(false);
   });
 });
 

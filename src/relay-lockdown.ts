@@ -142,6 +142,8 @@ export interface LockdownPlan {
   ports: number[];
   /** What could not become a rule, for the install's output. */
   notes: string[];
+  /** Each host name of `deny.hosts` with the addresses its rule holds (empty: it did not resolve). */
+  names: Record<string, string[]>;
 }
 
 /**
@@ -169,6 +171,7 @@ export function lockdownPlan(o: {
   }
   holes.sort((a, b) => (a.v6 === b.v6 ? (a.lo < b.lo ? -1 : 1) : a.v6 ? 1 : -1));
   const hosts: string[] = [];
+  const names: Record<string, string[]> = {};
   const add = (s: Span | undefined) => {
     if (s === undefined) return;
     const t = spanText(s);
@@ -188,6 +191,7 @@ export function lockdownPlan(o: {
       continue;
     }
     const got = o.resolved?.[h] ?? [];
+    names[h] = [...got];
     if (got.length === 0) {
       notes.push(`deny.hosts ${h}: does not resolve now, so no firewall rule holds it`);
       continue;
@@ -201,7 +205,55 @@ export function lockdownPlan(o: {
     hosts,
     ports: [...new Set(o.denyPorts)].sort((a, b) => a - b),
     notes,
+    names,
   };
+}
+
+/** Whether an address lies in a local range, which the lockdown blocks whatever deny.hosts says. */
+export function inLocalRange(address: string): boolean {
+  const s = addressSpan(address);
+  return s !== undefined && localSpans().some((l) => l.v6 === s.v6 && s.lo >= l.lo && s.hi <= l.hi);
+}
+
+/**
+ * Names of `deny.hosts` whose firewall rule no longer holds them: a name now resolving to an
+ * address outside the local ranges that its rule does not name, or a name added to the config
+ * after the install. Warnings only: `relay install` again writes the rules from the names anew.
+ */
+export async function denyNameDrift(o: {
+  denyHosts: readonly string[];
+  /** The names and addresses the install wrote rules for (install record). */
+  recorded: Readonly<Record<string, readonly string[]>>;
+  lookup?: (name: string) => Promise<string[]>;
+}): Promise<string[]> {
+  const lookup =
+    o.lookup ??
+    (async (name: string) => {
+      try {
+        return (await dnsLookup(name, { all: true })).map((a) => a.address);
+      } catch {
+        return [];
+      }
+    });
+  const out: string[] = [];
+  for (const h of o.denyHosts) {
+    if (h === 'local-subnets' || h === 'tailnet-peers' || h.includes('/')) continue;
+    if (addressSpan(h) !== undefined) continue;
+    const held = o.recorded[h];
+    if (held === undefined) {
+      out.push(
+        `deny.hosts ${h} has no firewall rule yet (added after the install): run studio relay install again`,
+      );
+      continue;
+    }
+    const now = (await lookup(h)).filter((a) => !inLocalRange(a) && !held.includes(a));
+    if (now.length > 0) {
+      out.push(
+        `deny.hosts ${h} now resolves to ${now.join(', ')}, which no firewall rule holds: run studio relay install again`,
+      );
+    }
+  }
+  return out;
 }
 
 /** Local targets the probe always tries: the first host of each local IPv4 range, port 445. */

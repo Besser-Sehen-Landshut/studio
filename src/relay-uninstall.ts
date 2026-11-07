@@ -53,6 +53,8 @@ export interface InstallRecord {
   } | null;
   /** Whether the install put the network lockdown in place (false after `--no-firewall`). */
   firewall?: boolean;
+  /** The deny.hosts names the lockdown blocked, with the addresses their rules hold. */
+  lockdownNames?: Record<string, string[]>;
 }
 
 const START_TYPES = ['Automatic', 'Manual', 'Disabled'] as const;
@@ -129,6 +131,18 @@ export function parseInstallRecord(raw: unknown): InstallRecord | undefined {
     readPaths: paths.filter((x): x is string => typeof x === 'string'),
     spoolerDisabled: r.spoolerDisabled === true,
     ...(typeof r.firewall === 'boolean' ? { firewall: r.firewall } : {}),
+    ...(r.lockdownNames !== null && typeof r.lockdownNames === 'object'
+      ? {
+          lockdownNames: Object.fromEntries(
+            Object.entries(r.lockdownNames as Record<string, unknown>).map(([k, v]) => [
+              k,
+              (Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]).filter(
+                (x): x is string => typeof x === 'string',
+              ),
+            ]),
+          ),
+        }
+      : {}),
     prior,
   };
 }
