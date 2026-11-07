@@ -360,9 +360,13 @@ describe.skipIf(!elevated)('the one-liner and the bootstrap on Windows', () => {
   /** A zip made by PowerShell with these entries (name, and a link's attributes when given). */
   const zipOf = (name: string, entries: { name: string; link?: boolean }[]) => {
     const file = join(work, name);
+    // One Add per entry: a single @(name, link) inside @() would be flattened into its parts.
     const list = entries
-      .map((e) => `@('${e.name.replace(/'/g, "''")}', ${e.link === true ? '$true' : '$false'})`)
-      .join(', ');
+      .map(
+        (e) =>
+          `[void]$items.Add(@('${e.name.replace(/'/g, "''")}', ${e.link === true ? '$true' : '$false'}))`,
+      )
+      .join('\n');
     execFileSync(
       'powershell.exe',
       [
@@ -372,7 +376,9 @@ describe.skipIf(!elevated)('the one-liner and the bootstrap on Windows', () => {
         `Add-Type -AssemblyName System.IO.Compression
 $fs = [IO.File]::Create('${file}')
 $z = New-Object IO.Compression.ZipArchive($fs, [IO.Compression.ZipArchiveMode]::Create)
-foreach ($e in @(${list})) { $x = $z.CreateEntry($e[0]); if ($e[1]) { $x.ExternalAttributes = [int](0xA1FF -shl 16) }; $w = New-Object IO.StreamWriter($x.Open()); $w.Write('x'); $w.Dispose() }
+$items = New-Object Collections.ArrayList
+${list}
+foreach ($e in $items) { $x = $z.CreateEntry($e[0]); if ($e[1]) { $x.ExternalAttributes = [int](0xA1FF -shl 16) }; $w = New-Object IO.StreamWriter($x.Open()); $w.Write('x'); $w.Dispose() }
 $z.Dispose(); $fs.Dispose()`,
       ],
       { env },
