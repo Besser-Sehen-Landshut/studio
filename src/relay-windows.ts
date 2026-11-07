@@ -478,7 +478,10 @@ $dataStudio = Split-Path -Parent $home_
 $filesStudio = Split-Path -Parent $machine
 SafeFolder $home_ (Split-Path -Parent $dataStudio)
 SafeFolder $machine (Split-Path -Parent $filesStudio)
-# The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
+# The relay account: a standard user the lead logs in as over SSH, with a password nobody sees. A
+# user of that name Studio did not make is never taken over.
+$existing = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
+if ($null -ne $existing -and $existing.Description -ne 'Studio relay (SSH, forced command)') { throw "a user $relay exists that Studio did not make (its description is not Studio's): choose another name with studio relay install --user <name>, or remove that user, then run this again" }
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
 # Studio's group of crew users (one user per job, made and deleted by the broker); what it carries
 # comes once the admin-only copy of Studio is in place.
@@ -551,6 +554,44 @@ ${pluginSetup}
 ${o.install === undefined ? setupTail(block) : installTail(block, o.install)}`;
 }
 
+/**
+ * PowerShell function `SshdConfigSwap $conf $text $mustTest`: the new sshd_config goes to a
+ * temporary file beside it, sshd checks that file (`sshd -t -f`, with a throwaway host key when
+ * the machine has none yet), and only a config sshd accepts replaces the old one, in one step
+ * (`[IO.File]::Replace`, which keeps its ACL). A refused one changes nothing. Without sshd.exe
+ * the check is skipped only where `$mustTest` allows it (uninstall: removing lines).
+ */
+export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
+  $dir = Split-Path -Parent $conf
+  $tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  $keyDir = $null
+  [IO.File]::WriteAllText($tmp, $text, (New-Object Text.UTF8Encoding $false))
+  try {
+    $exe = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
+    if (Test-Path -LiteralPath $exe) {
+      $sshdArgs = '-t -f "' + $tmp + '"'
+      if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
+        $keyDir = Join-Path $env:ProgramData ('studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $keyDir | Out-Null
+        icacls $keyDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /L /Q | Out-Null
+        $key = Join-Path $keyDir 'host_ed25519'
+        $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
+        if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
+        $sshdArgs += ' -h "' + $key + '"'
+      }
+      $tested = Start-Process -FilePath $exe -ArgumentList $sshdArgs -Wait -PassThru -NoNewWindow
+      if ($tested.ExitCode -ne 0) { throw "sshd does not accept the new sshd_config; $conf stays as it was" }
+    } elseif ($mustTest) {
+      throw "sshd.exe is not there to check the new sshd_config; $conf stays as it was"
+    }
+    if (Test-Path -LiteralPath $conf) { [IO.File]::Replace($tmp, $conf, [NullString]::Value) } else { [IO.File]::Move($tmp, $conf) }
+  } finally {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    if ($keyDir) { Remove-Item -LiteralPath $keyDir -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+`;
+
 /** Where sshd may be reached from: the Tailscale interface, another interface, or a source range. */
 export type SshdScope = { tailscale: true } | { interface: string } | { source: string };
 
@@ -607,17 +648,26 @@ export const relayJobFunctions = (o: {
   crewPrefix: string;
   forceStop: boolean;
   what: string;
+  /**
+   * Uninstall: the processes through `Owned` of the crew functions (the debug privilege on), and a
+   * process whose owner cannot be read counts as one of them.
+   */
+  owned?: boolean;
 }): string => `$forceStop = ${o.forceStop ? '$true' : '$false'}
 function RelayProcesses {
   $crewRe = '^' + [regex]::Escape(${psQuote(o.crewPrefix)}) + '-[0-9a-f]{6}$'
   $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(o.relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
   if ($sids.Count -eq 0) { return @() }
-  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
+${
+  o.owned === true
+    ? '  LoadTree\n  @(Owned $sids | ForEach-Object { [pscustomobject]@{ ProcessId = $_.Id; Name = $(if ($_.Unreadable) { "$($_.Name) (owner unreadable)" } else { $_.Name }) } })'
+    : '  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })'
+}
 }
 function NoRelayJob {
   $running = RelayProcesses
   if ($running.Count -eq 0) { return }
-  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user): let it end, or run studio relay ${o.what} --force-stop" }
+  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user${o.owned === true ? ', or whose owner cannot be read' : ''}: $(@($running | Select-Object -First 5 | ForEach-Object { "$($_.ProcessId) $($_.Name)" }) -join ', ')): let it end, or run studio relay ${o.what} --force-stop" }
   Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
   for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
     foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -772,14 +822,7 @@ $ours = @'
 ${block}# studio relay end
 '@
 $new = $global + $text.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $ours
-[IO.File]::WriteAllText($conf, $new, (New-Object Text.UTF8Encoding $false))
-$exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'
-$tested = $null
-if (Test-Path -LiteralPath $exe) { $tested = Start-Process -FilePath $exe -ArgumentList '-t' -Wait -PassThru -NoNewWindow }
-if ($null -eq $tested -or $tested.ExitCode -ne 0) {
-  [IO.File]::WriteAllBytes($conf, $before)
-  throw 'sshd does not accept the new sshd_config (or could not check it); it was put back as it was'
-}
+${SSHD_SWAP}SshdConfigSwap $conf $new $true
 ${scope}
 $rule = 'Studio relay: sshd'
 Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule

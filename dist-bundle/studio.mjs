@@ -41228,7 +41228,10 @@ $dataStudio = Split-Path -Parent $home_
 $filesStudio = Split-Path -Parent $machine
 SafeFolder $home_ (Split-Path -Parent $dataStudio)
 SafeFolder $machine (Split-Path -Parent $filesStudio)
-# The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
+# The relay account: a standard user the lead logs in as over SSH, with a password nobody sees. A
+# user of that name Studio did not make is never taken over.
+$existing = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
+if ($null -ne $existing -and $existing.Description -ne 'Studio relay (SSH, forced command)') { throw "a user $relay exists that Studio did not make (its description is not Studio's): choose another name with studio relay install --user <name>, or remove that user, then run this again" }
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
 # Studio's group of crew users (one user per job, made and deleted by the broker); what it carries
 # comes once the admin-only copy of Studio is in place.
@@ -41296,6 +41299,36 @@ ${recordSnippet({ machine: o2.machine, spoolerDisabled: o2.install?.disableSpool
 ${pluginSetup}
 ${o2.install === void 0 ? setupTail(block) : installTail(block, o2.install)}`;
 }
+var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
+  $dir = Split-Path -Parent $conf
+  $tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  $keyDir = $null
+  [IO.File]::WriteAllText($tmp, $text, (New-Object Text.UTF8Encoding $false))
+  try {
+    $exe = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
+    if (Test-Path -LiteralPath $exe) {
+      $sshdArgs = '-t -f "' + $tmp + '"'
+      if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
+        $keyDir = Join-Path $env:ProgramData ('studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $keyDir | Out-Null
+        icacls $keyDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /L /Q | Out-Null
+        $key = Join-Path $keyDir 'host_ed25519'
+        $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
+        if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
+        $sshdArgs += ' -h "' + $key + '"'
+      }
+      $tested = Start-Process -FilePath $exe -ArgumentList $sshdArgs -Wait -PassThru -NoNewWindow
+      if ($tested.ExitCode -ne 0) { throw "sshd does not accept the new sshd_config; $conf stays as it was" }
+    } elseif ($mustTest) {
+      throw "sshd.exe is not there to check the new sshd_config; $conf stays as it was"
+    }
+    if (Test-Path -LiteralPath $conf) { [IO.File]::Replace($tmp, $conf, [NullString]::Value) } else { [IO.File]::Move($tmp, $conf) }
+  } finally {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    if ($keyDir) { Remove-Item -LiteralPath $keyDir -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+`;
 var setupTail = (block) => `Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
 Write-Output @'
 ${block}'@
@@ -41314,12 +41347,12 @@ function RelayProcesses {
   $crewRe = '^' + [regex]::Escape(${psQuote(o2.crewPrefix)}) + '-[0-9a-f]{6}$'
   $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(o2.relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
   if ($sids.Count -eq 0) { return @() }
-  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
+${o2.owned === true ? '  LoadTree\n  @(Owned $sids | ForEach-Object { [pscustomobject]@{ ProcessId = $_.Id; Name = $(if ($_.Unreadable) { "$($_.Name) (owner unreadable)" } else { $_.Name }) } })' : "  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })"}
 }
 function NoRelayJob {
   $running = RelayProcesses
   if ($running.Count -eq 0) { return }
-  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user): let it end, or run studio relay ${o2.what} --force-stop" }
+  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user${o2.owned === true ? ", or whose owner cannot be read" : ""}: $(@($running | Select-Object -First 5 | ForEach-Object { "$($_.ProcessId) $($_.Name)" }) -join ', ')): let it end, or run studio relay ${o2.what} --force-stop" }
   Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
   for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
     foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -41426,14 +41459,7 @@ $ours = @'
 ${block}# studio relay end
 '@
 $new = $global + $text.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $ours
-[IO.File]::WriteAllText($conf, $new, (New-Object Text.UTF8Encoding $false))
-$exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'
-$tested = $null
-if (Test-Path -LiteralPath $exe) { $tested = Start-Process -FilePath $exe -ArgumentList '-t' -Wait -PassThru -NoNewWindow }
-if ($null -eq $tested -or $tested.ExitCode -ne 0) {
-  [IO.File]::WriteAllBytes($conf, $before)
-  throw 'sshd does not accept the new sshd_config (or could not check it); it was put back as it was'
-}
+${SSHD_SWAP}SshdConfigSwap $conf $new $true
 ${scope}
 $rule = 'Studio relay: sshd'
 Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
@@ -60852,7 +60878,7 @@ var COMMANDS = [
     about: "On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead"
   },
   {
-    usage: "relay uninstall [--keep-tree] [--force-stop] [--user <name>] [--home <dir>] [--i-am-local]",
+    usage: "relay uninstall [--keep-tree] [--force-stop] [--force-path] [--user <name>] [--home <dir>] [--i-am-local]",
     about: "On a Windows worker, elevated: remove everything relay install made, every lead first; run again to finish"
   },
   {
@@ -64281,6 +64307,21 @@ public static class StudioLsa {
   }
 }
 `;
+function treePathProblem(o2) {
+  const norm = (p) => p.replace(/[\\/]+$/, "").toLowerCase();
+  for (const p of [o2.home, o2.machine]) {
+    if (/^[a-z]:$/i.test(norm(p)) || norm(p) === "" || !/[\\/]studio[\\/]relay$/.test(norm(p))) {
+      return `${p} is not a folder Studio\\relay`;
+    }
+  }
+  if (norm(o2.home) !== norm(o2.recordedHome ?? o2.defaultHome) && norm(o2.home) !== norm(o2.defaultHome)) {
+    return `${o2.home} is not the relay home the install recorded (${o2.recordedHome ?? o2.defaultHome})`;
+  }
+  if (norm(o2.machine) !== norm(o2.defaultMachine) && !o2.machineMarked) {
+    return `${o2.machine} holds no install record of Studio's`;
+  }
+  return void 0;
+}
 var UNINSTALL_STEPS = 9;
 function relayUninstallScript(o2) {
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser)) {
@@ -64303,7 +64344,7 @@ $machine = ${psQuote(o2.machine)}
 $readPaths = @(${o2.readPaths.map(psQuote).join(", ")})
 ${crewAccountFunctions(o2.crewPrefix, { treeSource: adminCopy })}# The tree deleter from the admin-only copy, or once that is gone, from the Studio running this.
 if (-not (Test-Path -LiteralPath $treeSource)) { $treeSource = ${psQuote(o2.treeSource)} }
-${relayJobFunctions({ relayUser: o2.relayUser, crewPrefix: o2.crewPrefix, forceStop: o2.forceStop, what: "uninstall" })}
+${relayJobFunctions({ relayUser: o2.relayUser, crewPrefix: o2.crewPrefix, forceStop: o2.forceStop, what: "uninstall", owned: true })}${SSHD_SWAP}$forcePath = ${o2.forcePath === true ? "$true" : "$false"}
 ${step(1, "leads: every key and pairing goes, so no lead can log in")}
 foreach ($f in @(${psQuote(authorizedKeysFile(o2.machine))}, ${psQuote(join59(o2.machine, "pairing", "pairings.json"))})) {
   if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force; Write-Output "removed: $f" }
@@ -64341,14 +64382,23 @@ if ($null -ne $group) {
 ${step(6, "the relay account and its profile")}
 $account = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
 if ($null -ne $account -and $account.Description -ne ${psQuote(RELAY_DESCRIPTION)}) {
-  Write-Output "left as it is: the user $relay, which Studio did not make (its description is not Studio's)"
+  # A user Studio did not make served as its relay account (an earlier version took it over): it is
+  # disabled, never deleted.
+  Disable-LocalUser -SID $account.SID
+  Write-Output "WARNING: the user $relay was not made by Studio but served as its relay account: it is DISABLED, not removed. Remove it, or turn it back on yourself: Enable-LocalUser -Name $relay"
 } elseif ($null -ne $account) {
   LoadTree
   LockJobUser $account
-  foreach ($p in @(Owned @($account.SID.Value) | Where-Object { -not $_.Unreadable })) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-  Start-Sleep -Milliseconds 800
-  $still = @(Owned @($account.SID.Value) | Where-Object { -not $_.Unreadable })
-  if ($still.Count -gt 0) { throw "processes of $relay still run ($(@($still | ForEach-Object { "$($_.Id) $($_.Name)" }) -join ', ')): run studio relay uninstall --force-stop" }
+  # Every process of the account, and every one whose owner cannot be read (it may be the
+  # account's): nothing goes on while one runs, unless --force-stop ends them by PID.
+  $still = @(Owned @($account.SID.Value))
+  for ($t = 0; $t -lt 5 -and $still.Count -gt 0; $t++) {
+    foreach ($p in $still) { if ($forceStop -or -not $p.Unreadable) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+    Start-Sleep -Milliseconds 800
+    $still = @(Owned @($account.SID.Value))
+    if (-not $forceStop -and @($still | Where-Object { -not $_.Unreadable }).Count -eq 0) { break }
+  }
+  if ($still.Count -gt 0) { throw "processes of $relay (or whose owner cannot be read) still run ($(@($still | ForEach-Object { if ($_.Unreadable) { "$($_.Id) $($_.Name) (owner unreadable)" } else { "$($_.Id) $($_.Name)" } }) -join ', ')): run studio relay uninstall --force-stop" }
   QuarantineProfile $account (Join-Path (Quarantine) 'trees')
   Remove-LocalUser -SID $account.SID
   Write-Output "removed: the relay account $relay and its profile"
@@ -64372,13 +64422,7 @@ if (Test-Path -LiteralPath $conf) {
   $text = [regex]::Replace($text, '(?s)# studio relay begin global.*?# studio relay end global\\r?\\n?', '')
   $text = [regex]::Replace($text, '(?s)\\r?\\n?# studio relay begin\\r?\\n.*?# studio relay end\\r?\\n?', [Environment]::NewLine)
   if ($text -ne [Text.Encoding]::UTF8.GetString($before)) {
-    [IO.File]::WriteAllText($conf, $text.TrimEnd() + [Environment]::NewLine, (New-Object Text.UTF8Encoding $false))
-    $exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'
-    # sshd checks a config only with its host keys; without them it never ran with this one.
-    if ((Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath (Join-Path $env:ProgramData 'ssh\\ssh_host_ed25519_key'))) {
-      $tested = Start-Process -FilePath $exe -ArgumentList @('-t', '-f', ('"' + $conf + '"')) -Wait -PassThru -NoNewWindow
-      if ($tested.ExitCode -ne 0) { [IO.File]::WriteAllBytes($conf, $before); throw "sshd does not accept $conf without Studio's lines; it was put back as it was" }
-    }
+    SshdConfigSwap $conf ($text.TrimEnd() + [Environment]::NewLine) $false
     Write-Output "removed: Studio's lines in $conf"
   }
 }
@@ -64388,6 +64432,9 @@ ${step(8, o2.keepTree ? "the admin-only tree and the relay home stay (--keep-tre
 ${o2.keepTree ? "" : `foreach ($p in @($home_, $machine)) {
   $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
   if ($null -eq $item) { continue }
+  # Never a drive root, never a folder that is not Studio's relay folder, whatever was recorded.
+  $bare = $p.TrimEnd('\\', '/')
+  if (-not $forcePath -and ($bare -eq ([IO.Path]::GetPathRoot($p)).TrimEnd('\\', '/') -or $bare -notmatch '[\\\\/]Studio[\\\\/]relay$')) { throw "$p is not a folder Studio\\relay: nothing of it is removed (--force-path removes it all the same)" }
   if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { $item.Delete() } else { LoadTree; [StudioTree]::Remove($p, $null) }
   Write-Output "removed: $p"
   $up = Split-Path -Parent $p
@@ -66318,6 +66365,22 @@ async function uninstall(o2) {
     );
   }
   const record2 = readInstallRecord(o2.machine);
+  const home = o2.home ?? record2?.home ?? relayHomeDefault(o2.env);
+  if (o2.values["keep-tree"] !== true && o2.values["force-path"] !== true) {
+    const problem = treePathProblem({
+      home,
+      machine: o2.machine,
+      recordedHome: record2?.home,
+      defaultHome: relayHomeDefault(o2.env),
+      defaultMachine: relayMachineDefault(o2.env),
+      machineMarked: existsSync19(installRecordFile(o2.machine))
+    });
+    if (problem !== void 0) {
+      throw new Error(
+        `relay uninstall removes no tree it cannot tell is Studio's: ${problem}. Check --home and the path, or keep the trees with --keep-tree (--force-path removes them all the same)`
+      );
+    }
+  }
   let settings;
   try {
     settings = serveSettings(relayOwner(o2.owner, o2.home ?? relayHomeDefault(o2.env), o2.machine));
@@ -66329,11 +66392,12 @@ async function uninstall(o2) {
     relayUser: o2.relayUser ?? record2?.relayUser ?? "studio-relay",
     crewPrefix: record2?.crewPrefix ?? settings?.windows?.crewUser ?? "studio-crew",
     task: record2?.task ?? settings?.windows?.broker ?? "Studio relay broker",
-    home: o2.home ?? record2?.home ?? relayHomeDefault(o2.env),
+    home,
     machine: o2.machine,
     readPaths: record2?.readPaths ?? [],
     keepTree: o2.values["keep-tree"] === true,
     forceStop: o2.values["force-stop"] === true,
+    forcePath: o2.values["force-path"] === true,
     record: record2,
     treeSource: TREE_SOURCE()
   });
@@ -67337,11 +67401,12 @@ async function runCli(argv, deps) {
       values["disable-spooler"],
       values["i-am-local"],
       values["force-stop"],
-      values["keep-tree"]
+      values["keep-tree"],
+      values["force-path"]
     ];
     if (relayOnly.some((v) => v !== void 0) && cmd !== "relay") {
       throw new UsageError(
-        "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop and --keep-tree work with relay only"
+        "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop, --keep-tree and --force-path work with relay only"
       );
     }
     if (values["no-firewall"] !== void 0 && cmd !== "relay" && cmd !== "worker") {
@@ -71500,7 +71565,8 @@ function parseCli(argv) {
         "force-stop": { type: "boolean" },
         "disable-spooler": { type: "boolean" },
         "keep-tree": { type: "boolean" },
-        "no-firewall": { type: "boolean" }
+        "no-firewall": { type: "boolean" },
+        "force-path": { type: "boolean" }
       },
       allowPositionals: true,
       strict: true

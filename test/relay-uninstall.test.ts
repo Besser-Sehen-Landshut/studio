@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -25,9 +26,10 @@ import {
   RELAY_DESCRIPTION,
   relayUninstallScript,
   restoreSteps,
+  treePathProblem,
   type UninstallOptions,
 } from '../src/relay-uninstall.js';
-import { installRecordFile, relaySetupScript } from '../src/relay-windows.js';
+import { installRecordFile, relaySetupScript, SSHD_SWAP } from '../src/relay-windows.js';
 import { powershellEnv, windowsSetupScript } from '../src/windows-sandbox.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-relay-uninstall-')));
@@ -88,7 +90,19 @@ describe('the uninstall script', () => {
   it("removes only what is Studio's: the relay account by its description, the group by its own", () => {
     const s = relayUninstallScript(base);
     expect(s).toContain(`$account.Description -ne '${RELAY_DESCRIPTION}'`);
-    expect(s).toContain('left as it is: the user $relay, which Studio did not make');
+    // One that served as the relay account but is not Studio's is disabled, loudly, never deleted.
+    expect(s).toContain('Disable-LocalUser -SID $account.SID');
+    expect(s).toContain('WARNING: the user $relay was not made by Studio');
+    // Every process of the account, and every one whose owner cannot be read, holds it.
+    expect(s).toContain('$still = @(Owned @($account.SID.Value))');
+    expect(s).not.toContain('Owned @($account.SID.Value) | Where-Object { -not $_.Unreadable }');
+    // The jobs check goes through Owned too, with the debug privilege, unreadable owners included.
+    expect(s).toContain('@(Owned $sids | ForEach-Object');
+    // sshd_config: checked as a temporary file, swapped in only when sshd takes it.
+    expect(s).toContain('SshdConfigSwap $conf ($text.TrimEnd() + [Environment]::NewLine) $false');
+    // A tree is removed only when its path ends in Studio\relay and is no drive root.
+    expect(s).toContain("$bare -notmatch '[\\\\/]Studio[\\\\/]relay$'");
+    expect(relayUninstallScript({ ...base, forcePath: true })).toContain('$forcePath = $true');
     expect(s).toContain('$group.Description -ne $groupDescription) { throw');
     // The relay account's profile goes the way a crew user's does: into the quarantine, never followed.
     expect(s).toContain("QuarantineProfile $account (Join-Path (Quarantine) 'trees')");
@@ -285,10 +299,51 @@ describe('studio relay uninstall', () => {
 
   it('without a record: the defaults, and it says nothing is turned back on', async () => {
     const s = setup();
-    expect(await s.run()).toBe(0);
+    expect(await s.run({ 'keep-tree': true })).toBe(0);
     expect(s.scripts[0]).toContain("$relay = 'studio-relay'");
     expect(s.scripts[0]).toContain("$prefix = 'studio-crew'");
     expect(s.out.join('')).toContain('No install record here');
+  });
+
+  it("removes only trees it can tell are Studio's: recorded or default, ending in Studio\\relay", async () => {
+    const s = setup();
+    // A folder that is not Studio\relay, and one without the install's record: refused.
+    await expect(s.run()).rejects.toThrow(
+      /removes no tree it cannot tell is Studio's: .* is not a folder Studio/,
+    );
+    const studio = join(s.machine, 'Studio', 'relay');
+    mkdirSync(studio, { recursive: true });
+    await expect(s.run({}, { machine: studio })).rejects.toThrow(
+      /holds no install record of Studio's/,
+    );
+    writeFileSync(
+      installRecordFile(studio),
+      JSON.stringify({ version: 1, readPaths: [], spoolerDisabled: false, prior: null }),
+    );
+    expect(await s.run({}, { machine: studio })).toBe(0);
+    // --force-path removes them all the same, and says so in the script.
+    expect(await s.run({ 'force-path': true })).toBe(0);
+    expect(s.scripts.at(-1)).toContain('$forcePath = $true');
+    expect(
+      treePathProblem({
+        home: 'C:\\',
+        machine: 'C:\\Program Files\\Studio\\relay',
+        recordedHome: undefined,
+        defaultHome: 'C:\\ProgramData\\Studio\\relay',
+        defaultMachine: 'C:\\Program Files\\Studio\\relay',
+        machineMarked: false,
+      }),
+    ).toMatch(/is not a folder Studio/);
+    expect(
+      treePathProblem({
+        home: 'D:\\Data\\Studio\\relay',
+        machine: 'C:\\Program Files\\Studio\\relay',
+        recordedHome: 'C:\\ProgramData\\Studio\\relay',
+        defaultHome: 'C:\\ProgramData\\Studio\\relay',
+        defaultMachine: 'C:\\Program Files\\Studio\\relay',
+        machineMarked: false,
+      }),
+    ).toMatch(/is not the relay home the install recorded/);
   });
 
   it('never removes the tree it runs from; with --keep-tree it may run there', async () => {
@@ -307,7 +362,7 @@ describe('studio relay uninstall', () => {
     ).rejects.toThrow(/Windows relay worker/);
     expect(
       await s.run(
-        {},
+        { 'keep-tree': true },
         {
           exec: async (_f: string, a: string[]) => ({
             code: a.includes('-File') ? 1 : 0,
@@ -428,4 +483,69 @@ New-Item -ItemType Junction -Path ${q(join(home, 'state', 'link'))} -Target ${q(
     expect(second).toContain('done: Studio relay worker uninstalled');
     expect(second).not.toContain('removed:');
   }, 600_000);
+
+  it('a relay account Studio did not make is disabled, loudly, never deleted; a tree that is not Studio\\relay stays', () => {
+    const work = realpathSync(mkdtempSync(join(tmpdir(), 'studio-uninstall-guard-')));
+    const other = `sro${tag}`;
+    ps(`$pw = ConvertTo-SecureString ('Aa1!' + [Guid]::NewGuid().ToString('N')) -AsPlainText -Force
+New-LocalUser -Name '${other}' -Password $pw -Description 'someone else' | Out-Null`);
+    const plain = join(work, 'plain');
+    mkdirSync(plain);
+    writeFileSync(join(plain, 'keep.txt'), 'x');
+    const script = relayUninstallScript({
+      ...base,
+      relayUser: other,
+      crewPrefix: `sgx${tag}`,
+      task,
+      home: plain,
+      machine: join(work, 'pf', 'Studio', 'relay'),
+      readPaths: [],
+      record: undefined,
+      treeSource: TREE_SOURCE(),
+      sshdConfig: join(work, 'sshd_config'),
+    });
+    let failed = '';
+    try {
+      runFile(script);
+    } catch (e) {
+      failed = String((e as { stdout?: string }).stdout ?? '') + String(e);
+    }
+    expect(failed).toContain(`WARNING: the user ${other} was not made by Studio`);
+    expect(failed).toContain('is not a folder Studio\\relay: nothing of it is removed');
+    expect(ps(`[string](Get-LocalUser -Name '${other}').Enabled`)).toBe('False');
+    expect(existsSync(join(plain, 'keep.txt'))).toBe(true);
+    ps(`Remove-LocalUser -Name '${other}'`);
+  }, 300_000);
+
+  it('sshd_config: a config sshd refuses changes nothing; an accepted one is swapped in whole', () => {
+    const work = realpathSync(mkdtempSync(join(tmpdir(), 'studio-sshd-swap-')));
+    const conf = join(work, 'sshd_config');
+    writeFileSync(conf, 'Port 22\n');
+    const swap = (text: string, must: boolean) => {
+      try {
+        return runFile(
+          `$ErrorActionPreference = 'Stop'\n${SSHD_SWAP}SshdConfigSwap ${q(conf)} ${q(text)} $${must}\nWrite-Output 'swapped'`,
+        );
+      } catch (e) {
+        return `refused ${String((e as { stderr?: string }).stderr ?? e)}`;
+      }
+    };
+    const sshd = existsSync(
+      join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'OpenSSH', 'sshd.exe'),
+    );
+    if (sshd) {
+      expect(swap('NotAnOption yes\n', true)).toMatch(
+        /^refused .*sshd does not accept the new sshd_config/s,
+      );
+      expect(readFileSync(conf, 'utf8')).toBe('Port 22\n');
+      expect(swap('Port 2222\n', true)).toContain('swapped');
+      expect(readFileSync(conf, 'utf8')).toBe('Port 2222\n');
+    } else {
+      expect(swap('Port 2222\n', true)).toMatch(/sshd\.exe is not there/);
+      expect(readFileSync(conf, 'utf8')).toBe('Port 22\n');
+      expect(swap('Port 2222\n', false)).toContain('swapped');
+    }
+    // No temporary file or throwaway key is left behind.
+    expect(readdirSync(work)).toEqual(['sshd_config']);
+  }, 120_000);
 });
