@@ -1,0 +1,2 @@
+# The bootstrap is hashed by the lead and by the release: the same bytes everywhere.
+scripts/studio-relay-bootstrap.ps1 text eol=lf

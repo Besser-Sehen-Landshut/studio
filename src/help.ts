@@ -83,6 +83,11 @@ export const COMMANDS: HelpEntry[] = [
     about: "On the lead: make the lead's key for a relay worker and print the one pairing line",
   },
   {
+    usage: 'relay bootstrap anchor',
+    about:
+      'Print, as JSON, the SHA-256 of the bootstrap and the tree digest this Studio expects of its release (the release workflow checks the assets against it)',
+  },
+  {
     usage: 'relay bootstrap uninstall',
     about:
       "On the lead: print the line that removes a Windows relay worker with the bootstrap of this Studio's release, checked against this Studio",

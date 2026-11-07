@@ -62,9 +62,10 @@ const files = git(['ls-tree', '-r', '-z', '--name-only', rev, '--', ...BUNDLE_PA
   .filter((f) => f !== '')
   .sort();
 const tree = sha256(
-  files
-    .map((f) => `${sha256(git(['cat-file', 'blob', `${rev}:${f}`])).toLowerCase()}  ${f}\n`)
-    .join(''),
+  `paths: ${BUNDLE_PATHS.join(',')}\n` +
+    files
+      .map((f) => `${sha256(git(['cat-file', 'blob', `${rev}:${f}`])).toLowerCase()}  ${f}\n`)
+      .join(''),
 );
 
 // The template of the tag, filled as src/relay-bootstrap.ts fillBootstrap does it.

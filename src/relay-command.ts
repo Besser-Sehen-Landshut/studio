@@ -33,9 +33,9 @@ import { startEgressProxy } from './egress-proxy.js';
 import { HeldError } from './held.js';
 import { activeParks, blockHold, parkUntil, readLimits, writeLimits } from './limits.js';
 import { ensureStateDir, ownerStateRootFor, removeStateEntry, withBoardLock } from './paths.js';
-import { pinnedPlugins, STUDIO_VERSION } from './plugins.js';
+import { pinnedPlugins, STUDIO_REPOSITORY, STUDIO_VERSION } from './plugins.js';
 import type { Ports } from './ports.js';
-import { bootstrapCommand } from './relay-bootstrap.js';
+import { bootstrapCommand, leadAnchor } from './relay-bootstrap.js';
 import {
   collectRelay,
   followRelay,
@@ -831,6 +831,14 @@ export async function runRelayCommand(o: {
   }
   if (sub === 'unpair' && args.length === 1) {
     return await unpair({ ...o, home, machine, relayUser, label: args[0] as string });
+  }
+  if (sub === 'bootstrap' && args.length === 1 && args[0] === 'anchor') {
+    // What this Studio expects of its release's bootstrap and bundle (the release workflow checks
+    // the published assets against it).
+    o.stdout(
+      `${JSON.stringify({ version: STUDIO_VERSION, repository: STUDIO_REPOSITORY, ...leadAnchor() })}\n`,
+    );
+    return 0;
   }
   if (sub === 'bootstrap' && args.length === 1 && args[0] === 'uninstall') {
     // The line that removes a relay worker with the bootstrap of this Studio, checked as for pairing.

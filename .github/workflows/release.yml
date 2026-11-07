@@ -38,6 +38,19 @@ jobs:
           node-version: 24
       - name: Build the assets
         run: node scripts/release-assets.mjs --tag "$TAG" --repo "$GITHUB_REPOSITORY" --out "$RUNNER_TEMP/assets"
+      - name: The assets are what a lead of this version expects
+        # The values the PC checks come from the lead's own Studio, not from the release: the
+        # bootstrap and the bundle must match what this tag's Studio computes from its own files.
+        run: |
+          anchor="$(node bin/studio relay bootstrap anchor)"
+          field() { node -e 'console.log(JSON.parse(process.argv[1])[process.argv[2]])' "$anchor" "$1"; }
+          got_boot="$(sha256sum "$RUNNER_TEMP/assets/studio-relay-bootstrap.ps1" | cut -d' ' -f1 | tr a-f A-F)"
+          got_tree="$(cat "$RUNNER_TEMP/assets/tree-digest.txt")"
+          test "$(field tree)" = "$got_tree" || { echo "tree digest $got_tree, a lead of $TAG expects $(field tree)"; exit 1; }
+          # A fork's bootstrap names the fork: leads of this repository never fetch it.
+          if [ "$(field repository)" = "$GITHUB_REPOSITORY" ]; then
+            test "$(field bootstrapSha)" = "$got_boot" || { echo "bootstrap $got_boot, a lead of $TAG expects $(field bootstrapSha)"; exit 1; }
+          fi
       - name: Attach them and add their hashes to the notes
         env:
           GH_TOKEN: ${{ github.token }}

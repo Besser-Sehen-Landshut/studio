@@ -61080,6 +61080,10 @@ var COMMANDS = [
     about: "On the lead: make the lead's key for a relay worker and print the one pairing line"
   },
   {
+    usage: "relay bootstrap anchor",
+    about: "Print, as JSON, the SHA-256 of the bootstrap and the tree digest this Studio expects of its release (the release workflow checks the assets against it)"
+  },
+  {
     usage: "relay bootstrap uninstall",
     about: "On the lead: print the line that removes a Windows relay worker with the bootstrap of this Studio's release, checked against this Studio"
   },
@@ -61686,11 +61690,19 @@ function bundleFiles(root) {
   return out.sort();
 }
 function treeDigest(root) {
+  for (const p of BUNDLE_PATHS) {
+    try {
+      lstatSync43(join54(root, p));
+    } catch {
+      throw new Error(`${p} is missing in ${root}: not a complete Studio`);
+    }
+  }
   const lines2 = bundleFiles(root).map(
     (rel) => `${sha256(readFileSync50(join54(root, ...rel.split("/")))).toLowerCase()}  ${rel}
 `
   );
-  return sha256(lines2.join(""));
+  return sha256(`paths: ${BUNDLE_PATHS.join(",")}
+${lines2.join("")}`);
 }
 var pluginRoot = () => resolve11(dirname16(fileURLToPath7(import.meta.url)), "..");
 function leadAnchor(root = pluginRoot(), version2 = STUDIO_VERSION, repo = STUDIO_REPOSITORY) {
@@ -61699,7 +61711,7 @@ function leadAnchor(root = pluginRoot(), version2 = STUDIO_VERSION, repo = STUDI
 }
 function bootstrapCommand(o2, anchor2 = leadAnchor(), version2 = STUDIO_VERSION, repo = STUDIO_REPOSITORY, url2 = `https://github.com/${repo}/releases/download/v${version2}/studio-relay-bootstrap.ps1`) {
   const args = "pair" in o2 ? `-Pair '${o2.pair}'` : "-Uninstall";
-  return `$b = (New-Object Net.WebClient).DownloadData('${url2}'); if ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-', '') -ne '${anchor2.bootstrapSha}') { throw 'this is not the bootstrap of Studio ${version2} the lead runs: nothing was run' }; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($b))) ${args} -Tree '${anchor2.tree}'`;
+  return `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $b = (Invoke-WebRequest -UseBasicParsing -Uri '${url2}').RawContentStream.ToArray(); if ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-', '') -ne '${anchor2.bootstrapSha}') { throw 'this is not the bootstrap of Studio ${version2} the lead runs: nothing was run' }; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($b))) ${args} -Tree '${anchor2.tree}'`;
 }
 
 // src/relay-lead.ts
@@ -66459,6 +66471,13 @@ async function runRelayCommand(o2) {
   if (sub === "unpair" && args.length === 1) {
     return await unpair({ ...o2, home, machine, relayUser, label: args[0] });
   }
+  if (sub === "bootstrap" && args.length === 1 && args[0] === "anchor") {
+    o2.stdout(
+      `${JSON.stringify({ version: STUDIO_VERSION, repository: STUDIO_REPOSITORY, ...leadAnchor() })}
+`
+    );
+    return 0;
+  }
   if (sub === "bootstrap" && args.length === 1 && args[0] === "uninstall") {
     o2.stdout(
       `On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH):
@@ -70074,7 +70093,7 @@ async function runCli(argv, deps) {
         });
         if (code === void 0) {
           throw new UsageError(
-            "relay takes: pair <label> <host>, pair <label> --connect, bootstrap uninstall, install [--pair <line>], uninstall, unpair <label>, setup, serve, run <id>"
+            "relay takes: pair <label> <host>, pair <label> --connect, bootstrap anchor, bootstrap uninstall, install [--pair <line>], uninstall, unpair <label>, setup, serve, run <id>"
           );
         }
         return code;

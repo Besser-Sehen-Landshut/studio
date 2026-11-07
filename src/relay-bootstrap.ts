@@ -64,12 +64,28 @@ function bundleFiles(root: string): string[] {
   return out.sort();
 }
 
-/** The tree digest of a plugin folder (the lead's installed Studio, or an unpacked bundle). */
+/** A path segment the bootstrap takes: plain characters only (the zip check, src and PS alike). */
+export const SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
+/** Windows device names, with or without an extension: never a file name of the bundle. */
+export const DEVICE_RE = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+
+/**
+ * The tree digest of a plugin folder (the lead's installed Studio, or an unpacked bundle): the
+ * SHA-256 of `paths: <the bundle paths>` and then one line `<sha256>  <path>` per file, sorted by
+ * path (ordinal, `/` between segments). Every bundle path must be there.
+ */
 export function treeDigest(root: string): string {
+  for (const p of BUNDLE_PATHS) {
+    try {
+      lstatSync(join(root, p));
+    } catch {
+      throw new Error(`${p} is missing in ${root}: not a complete Studio`);
+    }
+  }
   const lines = bundleFiles(root).map(
     (rel) => `${sha256(readFileSync(join(root, ...rel.split('/')))).toLowerCase()}  ${rel}\n`,
   );
-  return sha256(lines.join(''));
+  return sha256(`paths: ${BUNDLE_PATHS.join(',')}\n${lines.join('')}`);
 }
 
 /** The plugin folder this Studio runs from. */
@@ -99,5 +115,6 @@ export function bootstrapCommand(
   url = `https://github.com/${repo}/releases/download/v${version}/studio-relay-bootstrap.ps1`,
 ): string {
   const args = 'pair' in o ? `-Pair '${o.pair}'` : '-Uninstall';
-  return `$b = (New-Object Net.WebClient).DownloadData('${url}'); if ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-', '') -ne '${anchor.bootstrapSha}') { throw 'this is not the bootstrap of Studio ${version} the lead runs: nothing was run' }; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($b))) ${args} -Tree '${anchor.tree}'`;
+  // TLS 1.2 first; the raw bytes are hashed before anything decodes them.
+  return `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $b = (Invoke-WebRequest -UseBasicParsing -Uri '${url}').RawContentStream.ToArray(); if ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-', '') -ne '${anchor.bootstrapSha}') { throw 'this is not the bootstrap of Studio ${version} the lead runs: nothing was run' }; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($b))) ${args} -Tree '${anchor.tree}'`;
 }

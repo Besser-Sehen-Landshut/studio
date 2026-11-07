@@ -3,7 +3,7 @@
 // lead computes from its own Studio (the bootstrap's SHA-256, the tree digest), the line `relay
 // pair` prints, the release workflow, and on the elevated windows-latest job the one-liner and the
 // bootstrap itself.
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   cpSync,
@@ -15,17 +15,24 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+import { LOOPBACK } from '../src/egress-proxy.js';
+
+const execFileAsync = promisify(execFile);
+
 import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { STUDIO_REPOSITORY, STUDIO_VERSION } from '../src/plugins.js';
 import {
   BUNDLE_PATHS,
   bootstrapCommand,
+  DEVICE_RE,
   fillBootstrap,
   leadAnchor,
+  SEGMENT_RE,
   treeDigest,
 } from '../src/relay-bootstrap.js';
 import { powershellEnv } from '../src/windows-sandbox.js';
@@ -96,7 +103,9 @@ describe('the bootstrap template', () => {
     expect(template.indexOf('& $nodeExe $studio')).toBeGreaterThan(digest);
     for (const rule of [
       "$n.StartsWith('studio/', [StringComparison]::Ordinal)",
-      "$n.Contains('\\') -or $n.Contains(':') -or ($parts -contains '..') -or ($parts -contains '.') -or ($parts -contains '')",
+      "$seg -cnotmatch '^[A-Za-z0-9._-]+$' -or $seg.EndsWith('.') -or $seg -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\\..*)?$'",
+      "if (($onDisk -join ',') -cne (@($bundlePaths | Sort-Object) -join ','))",
+      "[void]$text.Append('paths: ' + ($bundlePaths -join ',') + \"`n\")",
       '-not ($bundlePaths -ccontains $parts[0])',
       'if ($mode -eq 0xA000)',
       "New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)",
@@ -105,6 +114,37 @@ describe('the bootstrap template', () => {
       expect(template, rule).toContain(rule);
     }
     expect(template).toContain("if (-not $DryRun -and $Tree -notmatch '^[0-9A-Fa-f]{64}$')");
+  });
+
+  it('checks elevation and the language mode itself, scrubs its pairing line, and gives Node.js a clean environment', () => {
+    expect(template).toContain(
+      "if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage')",
+    );
+    expect(template).toContain('IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)');
+    expect(template).toContain('(Get-PSReadLineOption -ErrorAction Stop).HistorySavePath');
+    const clean = template.indexOf("$_.Name -like 'NODE_*' -or $_.Name -like 'npm_config_*'");
+    expect(clean).toBeGreaterThan(0);
+    expect(clean).toBeLessThan(template.indexOf('& $nodeExe $studio'));
+  });
+
+  it('every file of the bundle has a name the bootstrap takes', () => {
+    const files = execFileSync('git', ['ls-files', '--', ...BUNDLE_PATHS], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .filter((f) => f !== '');
+    expect(files.length).toBeGreaterThan(10);
+    for (const f of files) {
+      for (const seg of f.split('/')) {
+        expect(seg, f).toMatch(SEGMENT_RE);
+        expect(seg.endsWith('.'), f).toBe(false);
+        expect(DEVICE_RE.test(seg), f).toBe(false);
+      }
+    }
+    expect(readFileSync(join(repoRoot, '.gitattributes'), 'utf8')).toContain(
+      'scripts/studio-relay-bootstrap.ps1 text eol=lf',
+    );
   });
 
   it('stages in an admin-only folder made before the download, never in TEMP; asks before winget; never over SSH', () => {
@@ -187,8 +227,10 @@ describe('the line the lead prints', () => {
   it('checks the bootstrap by SHA-256 before it runs it, and hands it the tree digest', () => {
     const c = bootstrapCommand({ pair: 'studio-pair-1 lab x ssh-ed25519 AAAA' }, anchor);
     expect(c).toContain(
-      `DownloadData('https://github.com/${STUDIO_REPOSITORY}/releases/download/v${STUDIO_VERSION}/studio-relay-bootstrap.ps1')`,
+      `(Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/${STUDIO_REPOSITORY}/releases/download/v${STUDIO_VERSION}/studio-relay-bootstrap.ps1').RawContentStream.ToArray()`,
     );
+    expect(c.startsWith('[Net.ServicePointManager]::SecurityProtocol = ')).toBe(true);
+    expect(c).toContain('[Net.SecurityProtocolType]::Tls12');
     expect(c).toContain(
       `[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-', '') -ne '${anchor.bootstrapSha}'`,
     );
@@ -246,21 +288,34 @@ describe.skipIf(!elevated)('the one-liner and the bootstrap on Windows', () => {
   };
   const pair = `studio-pair-1 lab ${'a'.repeat(43)} ssh-ed25519 ${'A'.repeat(68)}`;
 
-  it('the one-liner runs the downloaded script only when its SHA-256 is the expected one, upper or lower case', () => {
-    const stub = join(work, 'stub.ps1');
+  it('the one-liner runs the downloaded script only when its SHA-256 is the expected one, upper or lower case', async () => {
     const text =
       '#Requires -RunAsAdministrator\r\n[CmdletBinding()]\r\nparam([string]$Pair, [string]$Tree, [switch]$Uninstall)\r\nWrite-Output "ran pair=$Pair tree=$Tree"\r\n';
-    writeFileSync(stub, text);
-    const url = pathToFileURL(stub).href;
+    // A server on loopback stands in for the release; PowerShell runs asynchronously beside it.
+    const server = createServer((_q, r) => {
+      r.writeHead(200, { 'content-type': 'application/octet-stream' });
+      r.end(text);
+    });
+    await new Promise<void>((done) => server.listen(0, LOOPBACK, done));
+    const url = `http://${LOOPBACK}:${(server.address() as { port: number }).port}/studio-relay-bootstrap.ps1`;
+    const ps = async (args: string[]) => {
+      try {
+        const r = await execFileAsync('powershell.exe', args, { encoding: 'utf8', env });
+        return { code: 0, out: r.stdout };
+      } catch (e) {
+        const x = e as { code: number; stdout: string; stderr: string };
+        return { code: x.code, out: `${x.stdout}${x.stderr}` };
+      }
+    };
     const right = { bootstrapSha: sha(text).toLowerCase(), tree: 'c'.repeat(64) };
-    const ok = ps([
+    const ok = await ps([
       '-NoProfile',
       '-NonInteractive',
       '-Command',
       bootstrapCommand({ pair: 'p' }, right, '1.0.0', 'o/n', url),
     ]);
     expect(ok.out).toContain(`ran pair=p tree=${'c'.repeat(64)}`);
-    const wrong = ps([
+    const wrong = await ps([
       '-NoProfile',
       '-NonInteractive',
       '-Command',
@@ -275,6 +330,7 @@ describe.skipIf(!elevated)('the one-liner and the bootstrap on Windows', () => {
     expect(wrong.code).not.toBe(0);
     expect(wrong.out).toContain('nothing was run');
     expect(wrong.out).not.toContain('ran pair');
+    server.close();
   }, 60_000);
 
   // The runner's Node.js in Program Files is older than 24: a copy of the released bootstrap runs
@@ -338,11 +394,15 @@ $z.Dispose(); $fs.Dispose()`,
     for (const [name, entries, said] of [
       ['dots.zip', [{ name: 'studio/bin/../../evil' }], 'unsafe path'],
       ['ads.zip', [{ name: 'studio/bin/studio:evil' }], 'unsafe path'],
+      ['tilde.zip', [{ name: 'studio/bin/STUDIO~1' }], 'unsafe path'],
+      ['dot.zip', [{ name: 'studio/bin/studio.' }], 'unsafe path'],
+      ['device.zip', [{ name: 'studio/bin/aux.txt' }], 'unsafe path'],
+      ['space.zip', [{ name: 'studio/bin/a b' }], 'unsafe path'],
       ['outside.zip', [{ name: 'evil.txt' }], 'outside studio/'],
       ['extra.zip', [{ name: 'studio/evil.txt' }], 'not part of Studio'],
       ['case.zip', [{ name: 'studio/bin/a' }, { name: 'studio/bin/A' }], 'differ only in case'],
       ['link.zip', [{ name: 'studio/bin/link', link: true }], 'holds a link'],
-      ['other.zip', [{ name: 'studio/bin/studio' }], 'is not the Studio'],
+      ['other.zip', [{ name: 'studio/bin/studio' }], 'not exactly the paths of Studio'],
     ] as const) {
       const r = bootstrap(
         ['-Pair', pair, '-Tree', assets.tree, '-Bundle', zipOf(name, [...entries])],
@@ -354,6 +414,17 @@ $z.Dispose(); $fs.Dispose()`,
       expect(r.out, name).toContain('nothing was');
     }
     expect(staged().length).toBe(before);
+  }, 300_000);
+
+  it('refuses the real bundle when the lead expects another tree digest', () => {
+    const r = bootstrap(
+      ['-Pair', pair, '-Tree', 'ab'.repeat(32), '-Bundle', assets.zip],
+      {},
+      patched(),
+    );
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('is not the Studio');
+    expect(r.out).toContain('nothing was run');
   }, 300_000);
 
   it("the real bundle with the lead's tree digest passes the checks and reaches relay install", () => {

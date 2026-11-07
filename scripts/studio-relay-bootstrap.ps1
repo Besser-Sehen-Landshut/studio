@@ -38,6 +38,23 @@ function Step([int]$n, [string]$what) { Write-Output "[$n/$steps] $what" }
 function Fail([string]$why, [string]$fix) { throw "$why. Fix: $fix" }
 
 if ($version -like '__*') { Fail 'this is the template of the bootstrap, not a released one' 'download studio-relay-bootstrap.ps1 from a release of Studio' }
+# Run as a script block (the lead's line), #Requires does not hold: elevation is checked here.
+if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { Fail "PowerShell runs in $($ExecutionContext.SessionState.LanguageMode) (Constrained Language Mode, set by a policy of this PC)" 'run it in a PowerShell with full language mode, or set the worker up with studio relay install by hand' }
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { Fail 'this PowerShell is not elevated' 'open PowerShell with Run as administrator and paste the line again' }
+# The pairing line holds a single-use secret: best effort, it leaves this user's PSReadLine history.
+function ForgetPair {
+  if (-not $Pair) { return }
+  try {
+    $secret = $Pair.Split(' ')[2]
+    $hist = (Get-PSReadLineOption -ErrorAction Stop).HistorySavePath
+    if ($secret -and (Test-Path -LiteralPath $hist)) {
+      $lines = @(Get-Content -LiteralPath $hist -Encoding UTF8)
+      $keep = @($lines | Where-Object { -not $_.Contains($secret) })
+      if ($keep.Count -ne $lines.Count) { Set-Content -LiteralPath $hist -Value $keep -Encoding UTF8 }
+    }
+  } catch { }
+}
+ForgetPair
 if (-not $Uninstall -and -not $Pair -and -not $DryRun) { Fail 'no pairing line' "on the lead run: studio relay pair <label> <host> and paste the whole line it prints" }
 if (-not $DryRun -and $Tree -notmatch '^[0-9A-Fa-f]{64}$') { Fail 'no tree digest from the lead' 'paste the whole line studio relay pair (or studio relay bootstrap uninstall) printed on the lead' }
 if ($Pair -and $Pair -notmatch '^studio-pair-1 [a-z][a-z0-9-]{0,31} [A-Za-z0-9_-]{43} ssh-ed25519 [A-Za-z0-9+/]{40,2000}={0,2}$') { Fail 'that is not a pairing line' "copy the whole line studio relay pair printed on the lead, in single quotes" }
@@ -143,7 +160,11 @@ try {
         $rel = $n.Substring(7).TrimEnd('/')
         if ($rel -eq '') { continue }
         $parts = $rel.Split('/')
-        if ($n.Contains('\') -or $n.Contains(':') -or ($parts -contains '..') -or ($parts -contains '.') -or ($parts -contains '')) { Fail "the bundle names an unsafe path ($n): nothing was unpacked" 'download the bootstrap of the release again' }
+        # Each segment plain (letters, digits, '.', '_', '-'): no '~' (short names), no space, '\',
+        # ':' (an alternate data stream) or drive letter; no trailing dot, no '.' or '..', no device name.
+        foreach ($seg in $parts) {
+          if ($seg -cnotmatch '^[A-Za-z0-9._-]+$' -or $seg.EndsWith('.') -or $seg -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$') { Fail "the bundle names an unsafe path ($n): nothing was unpacked" 'download the bootstrap of the release again' }
+        }
         if (-not ($bundlePaths -ccontains $parts[0])) { Fail "the bundle holds $n, which is not part of Studio: nothing was unpacked" 'download the bootstrap of the release again' }
         $mode = 0
         try { $mode = ([int64]$e.ExternalAttributes -shr 16) -band 0xF000 } catch { $mode = 0 }
@@ -164,14 +185,18 @@ try {
       }
       $archive.Dispose()
     } finally { $fs.Dispose() }
-    # The tree digest of what was unpacked, as the lead computes it over its own Studio.
+    # The tree digest of what lies on disk now, as the lead computes it over its own Studio: the
+    # top level must be exactly the bundle paths.
     $base = Join-Path $work 'studio'
+    $onDisk = @(Get-ChildItem -LiteralPath $base -Force | ForEach-Object { $_.Name } | Sort-Object)
+    if (($onDisk -join ',') -cne (@($bundlePaths | Sort-Object) -join ',')) { Fail "the bundle holds $($onDisk -join ', '), not exactly the paths of Studio: nothing was run" 'download the bootstrap of the release again' }
     $sha = [Security.Cryptography.SHA256]::Create()
     $rels = [Collections.Generic.List[string]]::new()
     foreach ($f in [IO.Directory]::EnumerateFiles($base, '*', [IO.SearchOption]::AllDirectories)) { $rels.Add($f.Substring($base.Length + 1).Replace('\', '/')) }
     $sorted = $rels.ToArray()
     [Array]::Sort($sorted, [StringComparer]::Ordinal)
     $text = New-Object Text.StringBuilder
+    [void]$text.Append('paths: ' + ($bundlePaths -join ',') + "`n")
     foreach ($r in $sorted) {
       $h = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes((Join-Path $base $r)))).Replace('-', '').ToLowerInvariant()
       [void]$text.Append($h + '  ' + $r + "`n")
@@ -187,10 +212,14 @@ try {
   if ($DryRun) {
     Write-Output "    would run: $shown $($Rest -join ' ') with $nodeExe"
   } else {
+    # Nothing of this session's environment steers Node.js or npm: no NODE_OPTIONS (preloads),
+    # NODE_PATH, NODE_EXTRA_CA_CERTS or any other NODE_* and npm_config_*.
+    foreach ($k in @(Get-ChildItem Env: | Where-Object { $_.Name -like 'NODE_*' -or $_.Name -like 'npm_config_*' } | ForEach-Object { $_.Name })) { Remove-Item -LiteralPath "Env:$k" -ErrorAction SilentlyContinue }
     & $nodeExe $studio @args2
     $code = $LASTEXITCODE
   }
 } finally {
+  ForgetPair
   # The install copied Studio into its admin-only tree; the download is not needed any more.
   # .NET deletes the tree without following a link (a recursive Remove-Item of Windows PowerShell
   # may); the folder is admin-only, made by this run.
