@@ -47,7 +47,13 @@ mkdirSync(out, { recursive: true });
 
 const rev = values.commit ?? tag;
 const sha256 = (data) => createHash('sha256').update(data).digest('hex').toUpperCase();
-const git = (args, o = {}) => execFileSync('git', args, { cwd: root, maxBuffer: 1 << 30, ...o });
+// The blobs as stored: no line-end conversion (git archive applies core.autocrlf, a Windows default).
+const git = (args, o = {}) =>
+  execFileSync('git', ['-c', 'core.autocrlf=false', ...args], {
+    cwd: root,
+    maxBuffer: 1 << 30,
+    ...o,
+  });
 
 const bundle = join(out, `studio-${version}.zip`);
 git(['archive', '--format=zip', '--prefix=studio/', '-o', bundle, rev, '--', ...BUNDLE_PATHS], {
