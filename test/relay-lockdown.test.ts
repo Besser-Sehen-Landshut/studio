@@ -171,7 +171,14 @@ describe('the lockdown in the setup scripts', () => {
     expect(fin).toBeGreaterThan(s.indexOf('$after = ConnectAs'));
     expect(s.indexOf('$null = RetireJobUsers', fin)).toBeGreaterThan(fin);
     // Every target must be the firewall's own refusal.
-    expect(s).toContain("$after[$_] -ne '10013'");
+    // Every target is the firewall's refusal or has no route at all, and one at least is refused.
+    expect(s).toContain("@('10051', '10065', '10013') -notcontains $after[$_]");
+    expect(s).toContain('$refused -eq 0');
+    // The probe script goes as a file in an admin-only folder (a credential logon's command line
+    // holds 1024 characters), its answer in the same folder.
+    expect(s).toContain("$dir = Join-Path $env:ProgramData ('studio-probe-'");
+    expect(s).toContain("'-File', ('\"' + $file + '\"')");
+    expect(s).not.toMatch(/\$env:TEMP/);
   });
 
   it('uninstall removes the rules and puts Point and Print back as recorded', () => {
@@ -215,6 +222,10 @@ describe('the check before every relay start', () => {
       /does not hold for the relay account \(.*timed out\): run studio relay install again/,
     );
     expect(await lockdownProblem(answer(all('10061')))).toMatch(/error 10061/);
+    // A target without any route reaches nothing; but at least one must be the firewall's refusal.
+    const noRoute = { ...all('10013'), [PROBE_FIXED[2] as string]: '10051' };
+    expect(await lockdownProblem(answer(noRoute))).toBeUndefined();
+    expect(await lockdownProblem(answer(all('10051')))).toMatch(/error 10051/);
     expect(await lockdownProblem(answer({}, 1))).toMatch(/cannot be checked/);
     expect(await lockdownProblem(answer({ x: '10013' }))).toMatch(/cannot be checked/);
     expect(unrefused({ a: 'open' })).toEqual(['a opened']);

@@ -40728,9 +40728,16 @@ foreach ($t in @($open.Keys)) {
 }
 [Console]::Out.Write((ConvertTo-Json -Compress $res))
 `;
+var NO_ROUTE = ["10051", "10065"];
 var FIREWALL_REFUSED = "10013";
 function unrefused(results) {
-  return Object.entries(results).filter(([, r]) => r !== FIREWALL_REFUSED).map(
+  const all = Object.entries(results);
+  if (all.length > 0 && !all.some(([, r]) => r === FIREWALL_REFUSED)) {
+    return all.map(
+      ([t, r]) => `${t} ${r === "open" ? "opened" : r === "timeout" ? "timed out" : `error ${r}`}`
+    );
+  }
+  return all.filter(([, r]) => r !== FIREWALL_REFUSED && !NO_ROUTE.includes(r)).map(
     ([t, r]) => `${t} ${r === "open" ? "opened" : r === "timeout" ? "timed out" : `error ${r}`}`
   );
 }
@@ -40769,23 +40776,34 @@ function LockdownCheck([string[]]$sids) {
   ,$problems
 }
 # Runs the connect test as a user with this password; the answer as a hashtable.
-function ConnectAs([string]$name, [string]$plain, [string[]]$targets) {
-  $script = '$targets = @(' + (($targets | ForEach-Object { "'" + $_ + "'" }) -join ', ') + ")\`n" + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(CONNECT_TEST, "utf8").toString("base64")}'))
-  $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
-  $secure = ConvertTo-SecureString $plain -AsPlainText -Force
-  $c = New-Object System.Management.Automation.PSCredential ("$env:COMPUTERNAME\\$name", $secure)
-  $out = Join-Path $env:TEMP ('studio-probe-' + [Guid]::NewGuid().ToString('N') + '.json')
-  $err = [IO.Path]::ChangeExtension($out, '.err')
+function ConnectAs([string]$name, [string]$sid, [string]$plain, [string[]]$targets) {
+  # The test goes to the user as a file: a command line of a logon with credentials holds at most
+  # 1024 characters. Its folder, and the answer files in it, only administrators change; the user
+  # reads the script, and writes its answer through the handles it is given.
+  $acl = New-Object Security.AccessControl.DirectorySecurity
+  $acl.SetAccessRuleProtection($true, $false)
+  foreach ($r in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @($sid, 'ReadAndExecute'))) {
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($r[0])), $r[1], 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+  }
+  $dir = Join-Path $env:ProgramData ('studio-probe-' + [Guid]::NewGuid().ToString('N'))
+  $null = [IO.Directory]::CreateDirectory($dir, $acl)
+  $file = Join-Path $dir 'probe.ps1'
+  $out = Join-Path $dir 'out.json'
+  $err = Join-Path $dir 'err.txt'
   try {
+    $script = '$targets = @(' + (($targets | ForEach-Object { "'" + $_ + "'" }) -join ', ') + ")\`r\`n" + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(CONNECT_TEST, "utf8").toString("base64")}'))
+    [IO.File]::WriteAllText($file, $script, (New-Object Text.ASCIIEncoding))
+    $secure = ConvertTo-SecureString $plain -AsPlainText -Force
+    $c = New-Object System.Management.Automation.PSCredential ("$env:COMPUTERNAME\\$name", $secure)
     $ps = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-EncodedCommand', $enc) -Credential $c -WorkingDirectory $env:SystemRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $file + '"')) -Credential $c -WorkingDirectory $env:SystemRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'the probe as the throwaway user did not finish' }
     $raw = Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue
     if (-not $raw) { throw "the probe as the throwaway user gave no answer: $(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)" }
     $h = @{}
     foreach ($q in (ConvertFrom-Json $raw).PSObject.Properties) { $h[$q.Name] = [string]$q.Value }
     $h
-  } finally { Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue }
+  } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
 }
 # Local targets for the probe: the fixed ones, the default gateways, the resolvers (port 80: 53
 # stays open) and a few neighbors, IPv4 only.
@@ -40809,9 +40827,9 @@ function LockdownProbe([string[]]$sids) {
   try {
     Add-LocalGroupMember -Group (Get-LocalGroup -SID 'S-1-5-32-545') -Member $u
     $targets = ProbeTargets
-    $before = ConnectAs $name $plain $targets
+    $before = ConnectAs $name $u.SID.Value $plain $targets
     LockdownRules (@($sids) + @($u.SID.Value))
-    $after = ConnectAs $name $plain $targets
+    $after = ConnectAs $name $u.SID.Value $plain $targets
   } finally {
     LockdownRules $sids
     $plain = $null
@@ -40819,9 +40837,12 @@ function LockdownProbe([string[]]$sids) {
     if (Get-LocalUser -SID $u.SID -ErrorAction SilentlyContinue) { Remove-LocalUser -SID $u.SID }
   }
   $open = @($before.Keys | Where-Object { $before[$_] -ne '${FIREWALL_REFUSED}' }).Count
+  # No route at all (10051, 10065) reaches nothing either; the firewall must refuse the rest, and
+  # at least one target.
   Write-Output "lockdown probe: before the rule $open of $($targets.Count) local targets were not refused by the firewall; after it:"
-  $bad = @($after.Keys | Where-Object { $after[$_] -ne '${FIREWALL_REFUSED}' } | ForEach-Object { "$_ $($after[$_])" })
-  if ($after.Count -ne $targets.Count -or $bad.Count -gt 0) { throw "the network lockdown does not hold: the firewall did not refuse $($bad -join ', '); nothing was opened to the lead. Check that no other firewall product replaces Windows Firewall, then run this again" }
+  $bad = @($after.Keys | Where-Object { @(${NO_ROUTE.concat([FIREWALL_REFUSED]).map((c3) => `'${c3}'`).join(", ")}) -notcontains $after[$_] } | ForEach-Object { "$_ $($after[$_])" })
+  $refused = @($after.Keys | Where-Object { $after[$_] -eq '${FIREWALL_REFUSED}' }).Count
+  if ($after.Count -ne $targets.Count -or $bad.Count -gt 0 -or $refused -eq 0) { throw "the network lockdown does not hold: the firewall did not refuse $($bad -join ', '); nothing was opened to the lead. Check that no other firewall product replaces Windows Firewall, then run this again" }
   Write-Output "ok: all $($targets.Count) refused by the firewall"
 }
 `;
