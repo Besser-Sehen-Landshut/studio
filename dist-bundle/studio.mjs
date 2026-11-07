@@ -7841,14 +7841,14 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { realpathSync as realpathSync13 } from "node:fs";
+import { realpathSync as realpathSync14 } from "node:fs";
 import { homedir as homedir16 } from "node:os";
 import { fileURLToPath as fileURLToPath9 } from "node:url";
 
 // src/cli.ts
 import { existsSync as existsSync21, readFileSync as readFileSync60 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
-import { dirname as dirname22, join as join67, resolve as resolve17 } from "node:path";
+import { dirname as dirname23, join as join67, resolve as resolve17 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/acceptance.ts
@@ -61732,11 +61732,11 @@ import {
   writeFileSync as writeFileSync21
 } from "node:fs";
 import { homedir as homedir13 } from "node:os";
-import { dirname as dirname20, join as join64, resolve as resolve15, win32 as win324 } from "node:path";
+import { dirname as dirname21, join as join64, resolve as resolve15, win32 as win324 } from "node:path";
 
 // src/lead-machine.ts
-import { statSync as statSync7 } from "node:fs";
-import { join as join54, resolve as resolve11 } from "node:path";
+import { realpathSync as realpathSync13, statSync as statSync7 } from "node:fs";
+import { basename as basename7, dirname as dirname16, join as join54, resolve as resolve11 } from "node:path";
 function leadKind(p) {
   if (p.platform === "darwin") return "macos";
   if (p.platform === "win32") return "windows";
@@ -61780,13 +61780,31 @@ function leadMachineProblem(kind, env) {
     return { why: "this platform is not supported", fix: "run the lead on macOS, Linux or WSL2" };
   return void 0;
 }
-function onWindowsDrive(path10, p) {
+function onWindowsDrive(path10, p, real = realpathSync13) {
   if (p.platform !== "linux" || p.wsl === "none") return false;
-  const abs = `${resolve11(path10).replace(/\/+$/, "")}/`;
   const roots = [p.automountRoot, ...p.windowsMounts ?? []].map(
     (r) => `${r.replace(/\/+$/, "")}/`
   );
-  return roots.some((r) => r !== "/" && abs.startsWith(r));
+  const on6 = (x) => {
+    const abs2 = `${x.replace(/\/+$/, "")}/`;
+    return roots.some((r) => r !== "/" && abs2.startsWith(r));
+  };
+  const abs = resolve11(path10);
+  return on6(abs) || on6(nearestReal(abs, real));
+}
+function nearestReal(path10, real = realpathSync13) {
+  const rest = [];
+  let at2 = resolve11(path10);
+  for (; ; ) {
+    try {
+      return join54(real(at2), ...rest.reverse());
+    } catch {
+      const up = dirname16(at2);
+      if (up === at2) return resolve11(path10);
+      rest.push(basename7(at2));
+      at2 = up;
+    }
+  }
 }
 function onPath(name, env) {
   for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
@@ -61803,7 +61821,7 @@ function onPath(name, env) {
 // src/relay-bootstrap.ts
 import { createHash as createHash8 } from "node:crypto";
 import { lstatSync as lstatSync43, readdirSync as readdirSync17, readFileSync as readFileSync50 } from "node:fs";
-import { dirname as dirname16, join as join55, resolve as resolve12 } from "node:path";
+import { dirname as dirname17, join as join55, resolve as resolve12 } from "node:path";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 var BUNDLE_PATHS = [
   ".claude-plugin",
@@ -61857,7 +61875,7 @@ function treeDigest(root) {
   return sha256(`paths: ${BUNDLE_PATHS.join(",")}
 ${lines2.join("")}`);
 }
-var pluginRoot = () => resolve12(dirname16(fileURLToPath7(import.meta.url)), "..");
+var pluginRoot = () => resolve12(dirname17(fileURLToPath7(import.meta.url)), "..");
 function leadAnchor(root = pluginRoot(), version2 = STUDIO_VERSION, repo = STUDIO_REPOSITORY) {
   const template = readFileSync50(join55(root, "scripts", "studio-relay-bootstrap.ps1"), "utf8");
   return { bootstrapSha: sha256(fillBootstrap(template, version2, repo)), tree: treeDigest(root) };
@@ -62718,7 +62736,7 @@ async function relayDoctor(o2) {
 var import_yaml17 = __toESM(require_dist(), 1);
 import { createHash as createHash10, createHmac, randomBytes as randomBytes12, timingSafeEqual } from "node:crypto";
 import { existsSync as existsSync16, mkdirSync as mkdirSync12, readFileSync as readFileSync52, renameSync as renameSync15, rmSync as rmSync11, writeFileSync as writeFileSync18 } from "node:fs";
-import { dirname as dirname17, join as join58 } from "node:path";
+import { dirname as dirname18, join as join58 } from "node:path";
 var PAIR_TTL_MS = 60 * 6e4;
 var PAIR_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 var PAIR_PREFIX = "studio-pair-1";
@@ -62797,7 +62815,7 @@ function writeRelayTarget(owner, label, t) {
     host_key: t.hostKey,
     identity_file: t.identityFile
   });
-  mkdirSync12(dirname17(file4), { recursive: true, mode: 448 });
+  mkdirSync12(dirname18(file4), { recursive: true, mode: 448 });
   const tmp = `${file4}.${process.pid}.${Date.now()}.tmp`;
   try {
     writeFileSync18(tmp, doc.toString(), { mode: 384, flag: "wx" });
@@ -62833,7 +62851,7 @@ function readPairings(machine) {
 }
 function writePairings(machine, all) {
   const file4 = pairingsFile(machine);
-  mkdirSync12(dirname17(file4), { recursive: true });
+  mkdirSync12(dirname18(file4), { recursive: true });
   const tmp = `${file4}.${process.pid}.tmp`;
   writeFileSync18(tmp, `${JSON.stringify(all, null, 2)}
 `);
@@ -62879,13 +62897,13 @@ import {
   writeSync as writeSync3
 } from "node:fs";
 import { cpus, homedir as homedir12 } from "node:os";
-import { dirname as dirname19, join as join60, resolve as resolve14 } from "node:path";
+import { dirname as dirname20, join as join60, resolve as resolve14 } from "node:path";
 import { fileURLToPath as fileURLToPath8, pathToFileURL } from "node:url";
 
 // src/worker.ts
 import { existsSync as existsSync17, lstatSync as lstatSync45, readdirSync as readdirSync18, readFileSync as readFileSync53 } from "node:fs";
 import { homedir as homedir11 } from "node:os";
-import { dirname as dirname18, join as join59 } from "node:path";
+import { dirname as dirname19, join as join59 } from "node:path";
 var WORKER_FILE = "worker.json";
 var WORKER_LOCK = "worker.lock";
 var WORKER_LOCK_STALE_MS = 3 * 60 * 6e4;
@@ -62969,7 +62987,7 @@ async function pinnedContent(c3, stateRoot, sha) {
     if (!m || !CONTENT_PATH.test(m[2]) || n4++ >= 500) continue;
     const text2 = await g3(["cat-file", "blob", m[1]]);
     const file4 = join59(dir, m[2]);
-    ensureStateDir(stateRoot, dirname18(file4));
+    ensureStateDir(stateRoot, dirname19(file4));
     writeStateFile(stateRoot, file4, `${text2}
 `);
   }
@@ -63023,7 +63041,7 @@ async function readiness(c3, stateRoot) {
       line: "this machine's GitHub token is the lead's own identity; a worker needs a token of its own, so its claims and pull requests can be told apart"
     };
   }
-  const stateBase = dirname18(stateRoot);
+  const stateBase = dirname19(stateRoot);
   const deny = enforceDeny({
     deny: mergeDeny(config2.workers?.[c3.label]?.deny, self.deny),
     platform: platform2,
@@ -63861,9 +63879,9 @@ async function takeBundle(c3, job, bundle) {
   try {
     const mirror = mirrorDir(c3, job.repo);
     if (!existsSync18(join60(mirror, "HEAD"))) {
-      ensureStateDir(root, dirname19(mirror));
+      ensureStateDir(root, dirname20(mirror));
       removeStateEntry(root, mirror);
-      await git(c3, dirname19(mirror), ["init", "-q", "--bare", "--template=", mirror]);
+      await git(c3, dirname20(mirror), ["init", "-q", "--bare", "--template=", mirror]);
     }
     const heads = (await git(c3, mirror, ["bundle", "list-heads", file4])).split("\n").filter((l) => l.trim() !== "");
     const want = /* @__PURE__ */ new Map([["refs/heads/main", job.sha]]);
@@ -63887,9 +63905,9 @@ async function takeBundle(c3, job, bundle) {
     const project = projectDir(c3, job.repo);
     const url2 = pathToFileURL(mirror).href;
     if (!existsSync18(join60(project, ".git"))) {
-      ensureStateDir(root, dirname19(project));
+      ensureStateDir(root, dirname20(project));
       removeStateEntry(root, project);
-      await git(c3, dirname19(project), ["clone", "-q", "--no-checkout", url2, project]);
+      await git(c3, dirname20(project), ["clone", "-q", "--no-checkout", url2, project]);
     } else {
       await git(c3, project, [
         "fetch",
@@ -64227,7 +64245,7 @@ async function collect2(c3, id, out) {
   removeStateEntry(root, dir);
   const branch = `refs/heads/studio/${id}`;
   try {
-    await git(c3, dirname19(dir), ["init", "-q", "--bare", "--template=", dir]);
+    await git(c3, dirname20(dir), ["init", "-q", "--bare", "--template=", dir]);
     const mirrorObjects = join60(mirrorDir(c3, j.repo), "objects");
     writeStateFile(root, join60(dir, "objects", "info", "alternates"), `${mirrorObjects}
 `);
@@ -64330,7 +64348,7 @@ async function cleanup(c3, id) {
   const root = relayRoot(c3.owner);
   removeStateEntry(root, jobFile(c3, id));
 }
-var STUDIO_BIN = resolve14(dirname19(fileURLToPath8(import.meta.url)), "..", "bin", "studio");
+var STUDIO_BIN = resolve14(dirname20(fileURLToPath8(import.meta.url)), "..", "bin", "studio");
 function relayHandoffScript(o2) {
   if (!/^[A-Z]+-\d+$/.test(o2.id)) throw new Error("not an item id");
   if (!LEAD_RE.test(o2.lead)) throw new Error("not a lead name");
@@ -64485,7 +64503,7 @@ function copyCrewObjects(clone2, dest, id, root) {
       }
       total += st2.size;
       if (total > MAX_CREW_OBJECTS_BYTES) throw new Error("the objects are larger than allowed");
-      ensureStateDir(root, dirname19(to));
+      ensureStateDir(root, dirname20(to));
       const out = openSync9(to, "wx", 384);
       try {
         const buf = Buffer.alloc(1 << 20);
@@ -66473,7 +66491,7 @@ function relayContext(o2) {
     } : {}
   };
 }
-var machineOf = () => resolve15(dirname20(process.execPath), "..");
+var machineOf = () => resolve15(dirname21(process.execPath), "..");
 async function readAll(input2) {
   let s = "";
   for await (const c3 of input2) s += typeof c3 === "string" ? c3 : Buffer.from(c3).toString("utf8");
@@ -66708,7 +66726,7 @@ function setupScriptFor(o2) {
     task: settings.windows?.broker ?? "Studio relay broker",
     // Node.js, Studio and the plugins are read from the admin-only tree; these are the rest.
     readPaths: [
-      ...claude === void 0 ? [] : [dirname20(claude)],
+      ...claude === void 0 ? [] : [dirname21(claude)],
       ...loadOwnerConfig(o2.owner).crewToolchainPaths
     ],
     // Node.js for all users, where only administrators change it: never the node this CLI runs on,
@@ -66719,7 +66737,7 @@ function setupScriptFor(o2) {
         "nodejs",
         "node.exe"
       ),
-      studio: resolve15(dirname20(STUDIO_BIN), "..")
+      studio: resolve15(dirname21(STUDIO_BIN), "..")
     },
     ...o2.install === void 0 ? {} : { install: o2.install },
     lockdown: o2.lockdown
@@ -66848,7 +66866,7 @@ async function install(o2) {
   }
   const config2 = join64(machineConfig(o2.machine), "studio", "config.yaml");
   if (!existsSync19(config2)) {
-    mkdirSync13(dirname20(config2), { recursive: true });
+    mkdirSync13(dirname21(config2), { recursive: true });
     const tmp = `${config2}.${process.pid}.tmp`;
     writeFileSync21(tmp, DEFAULT_SERVE_CONFIG, { flag: "wx" });
     renameSync16(tmp, config2);
@@ -66957,7 +66975,7 @@ async function unpair(o2) {
 }
 var missingSsh = (tool, platform2) => `${tool} is not installed here: ${installCommand("ssh", leadKind(platform2 ?? detectPlatform()))}, then run this again`;
 function leadFilesProblem(owner, key, platform2) {
-  for (const dir of [dirname20(key), join64(ownerStateRootFor(owner), "relay")]) {
+  for (const dir of [dirname21(key), join64(ownerStateRootFor(owner), "relay")]) {
     if (onWindowsDrive(dir, platform2)) {
       throw new Error(
         `${dir} is on a Windows drive, which keeps no file modes, so ssh would refuse the key: unset XDG_CONFIG_HOME and XDG_STATE_HOME (or point them below ~ in the Linux file system), then run this again`
@@ -66977,7 +66995,7 @@ async function pairStart(o2) {
   const exec = o2.exec ?? systemExec;
   const key = leadKeyFile(o2.owner, o2.label);
   leadFilesProblem(o2.owner, key, o2.platform ?? detectPlatform());
-  mkdirSync13(dirname20(key), { recursive: true, mode: 448 });
+  mkdirSync13(dirname21(key), { recursive: true, mode: 448 });
   rmSync13(key, { force: true });
   rmSync13(`${key}.pub`, { force: true });
   const made = await exec("ssh-keygen", [
@@ -67080,7 +67098,7 @@ import {
   writeFileSync as writeFileSync22
 } from "node:fs";
 import { homedir as homedir14 } from "node:os";
-import { dirname as dirname21, join as join65, resolve as resolve16 } from "node:path";
+import { dirname as dirname22, join as join65, resolve as resolve16 } from "node:path";
 var DEFAULT_LABEL2 = "main";
 var MAX_LABEL = 32;
 var TOKEN_TEXT = [
@@ -67152,7 +67170,7 @@ function studioOnPath(env) {
 }
 var yes = (answer2) => /^(|y|yes)$/i.test(answer2.trim());
 function writeAtomic2(file4, text2, mode) {
-  const tmp = join65(dirname21(file4), `.studio-${process.pid}-${Date.now()}.tmp`);
+  const tmp = join65(dirname22(file4), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
     writeFileSync22(tmp, text2, { flag: "wx", mode });
     chmodSync6(tmp, mode);
@@ -67234,7 +67252,7 @@ async function link(o2, home) {
   }
   const cache2 = join65(ownerConfigDir(o2.owner), "launcher");
   const writeCache = () => {
-    mkdirSync14(dirname21(cache2), { recursive: true, mode: 448 });
+    mkdirSync14(dirname22(cache2), { recursive: true, mode: 448 });
     writeAtomic2(cache2, `${launcher2}
 `, 384);
   };
@@ -68095,11 +68113,11 @@ async function runCli(argv, deps) {
       }
     };
     const dailyCostHold = async (config2, ownerConfig) => {
-      const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname22(ownerRoot()))])];
+      const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname23(ownerRoot()))])];
       if (!readOnly) await recordAllEnded(roots, ownerConfig);
       return costHold({
         stateRoot: stateRoot(),
-        stateBase: dirname22(ownerRoot()),
+        stateBase: dirname23(ownerRoot()),
         config: config2,
         ownerConfig,
         now: ports.clock.now()
@@ -68400,7 +68418,7 @@ async function runCli(argv, deps) {
       const { config: config2 } = loadAll();
       refuseNativeQueue(config2);
       const root = await boundStateRoot();
-      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname22(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname23(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
       const blockedNow = queueHold();
       if (blockedNow !== void 0) throw new HeldError(blockedNow);
       let heldLine;
@@ -69570,7 +69588,7 @@ async function runCli(argv, deps) {
       const cachePhase = async () => {
         const now = ports.clock.now();
         const removed = await cacheCleanup({
-          stateBase: dirname22(root),
+          stateBase: dirname23(root),
           ownerRoot: ownerRoot(),
           ownerConfig: loadOwnerConfig(owner),
           now
@@ -71475,7 +71493,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
           throw new UsageError("accounts-clear needs exactly one valid label");
         }
         await boundStateRoot();
-        await recordAllEnded(projectStateRoots(dirname22(ownerRoot())), loadOwnerConfig(owner));
+        await recordAllEnded(projectStateRoots(dirname23(ownerRoot())), loadOwnerConfig(owner));
         const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
@@ -72842,7 +72860,7 @@ function realPorts(claudeBin = "claude") {
 // src/main.ts
 function launcher() {
   try {
-    return realpathSync13(fileURLToPath9(new URL("../bin/studio", import.meta.url)));
+    return realpathSync14(fileURLToPath9(new URL("../bin/studio", import.meta.url)));
   } catch {
     return void 0;
   }

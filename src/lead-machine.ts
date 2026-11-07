@@ -4,8 +4,8 @@
 // Under WSL2 the lead's own files must stay in the Linux file system: a Windows drive mounted into
 // it (`/mnt/c`) neither keeps file modes (an SSH key there is refused by ssh, a token file is open
 // to every Windows program) nor case.
-import { statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { realpathSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { WorkerPlatform } from './worker-deny.js';
 
 export type LeadKind = 'macos' | 'linux' | 'wsl2' | 'wsl1' | 'windows' | 'other';
@@ -70,13 +70,39 @@ export function leadMachineProblem(
  * Under WSL2: a path on a Windows drive mounted into the distribution, which keeps no Unix file
  * modes; undefined elsewhere and for a path in the Linux file system.
  */
-export function onWindowsDrive(path: string, p: WorkerPlatform): boolean {
+export function onWindowsDrive(
+  path: string,
+  p: WorkerPlatform,
+  real: (path: string) => string = realpathSync,
+): boolean {
   if (p.platform !== 'linux' || p.wsl === 'none') return false;
-  const abs = `${resolve(path).replace(/\/+$/, '')}/`;
   const roots = [p.automountRoot, ...(p.windowsMounts ?? [])].map(
     (r) => `${r.replace(/\/+$/, '')}/`,
   );
-  return roots.some((r) => r !== '/' && abs.startsWith(r));
+  // The path as written and as it resolves: a link in the Linux file system (or a parent that is
+  // one) may lead onto a Windows drive. The nearest existing parent is resolved, the rest appended.
+  const on = (x: string) => {
+    const abs = `${x.replace(/\/+$/, '')}/`;
+    return roots.some((r) => r !== '/' && abs.startsWith(r));
+  };
+  const abs = resolve(path);
+  return on(abs) || on(nearestReal(abs, real));
+}
+
+/** `path` with its nearest existing ancestor resolved (links followed), the missing rest appended. */
+export function nearestReal(path: string, real: (path: string) => string = realpathSync): string {
+  const rest: string[] = [];
+  let at = resolve(path);
+  for (;;) {
+    try {
+      return join(real(at), ...rest.reverse());
+    } catch {
+      const up = dirname(at);
+      if (up === at) return resolve(path);
+      rest.push(basename(at));
+      at = up;
+    }
+  }
 }
 
 /** An executable named `name` on PATH, or undefined. */

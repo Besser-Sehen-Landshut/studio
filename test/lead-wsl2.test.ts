@@ -9,6 +9,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,6 +20,7 @@ import {
   installCommand,
   leadKind,
   leadMachineProblem,
+  nearestReal,
   onPath,
   onWindowsDrive,
 } from '../src/lead-machine.js';
@@ -78,6 +80,22 @@ describe('the lead machine', () => {
     expect(
       onWindowsDrive('/mnt/c/x', { platform: 'linux', wsl: 'none', automountRoot: '/mnt/' }),
     ).toBe(false);
+  });
+
+  it('follows links: a Linux path whose nearest existing parent resolves onto a Windows drive is one', () => {
+    const mnt = join(root, 'links', 'mnt');
+    const home = join(root, 'links', 'home');
+    mkdirSync(join(mnt, 'c', 'cfg'), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    symlinkSync(join(mnt, 'c', 'cfg'), join(home, '.config'));
+    const p = wsl2({ automountRoot: `${mnt}/` });
+    // Not there yet (the key folder is made later): its nearest existing parent is the link.
+    expect(onWindowsDrive(join(home, '.config', 'studio', 'relay'), p)).toBe(true);
+    expect(nearestReal(join(home, '.config', 'studio', 'relay'))).toBe(
+      join(mnt, 'c', 'cfg', 'studio', 'relay'),
+    );
+    expect(onWindowsDrive(join(home, 'plain', 'x'), p)).toBe(false);
+    expect(nearestReal(join(home, 'plain', 'x'))).toBe(join(home, 'plain', 'x'));
   });
 
   it('finds an executable on PATH only', () => {
@@ -169,7 +187,8 @@ describe('relay pair from a WSL2 lead', () => {
     const l = lead();
     expect(await l.run(['pair', 'lab', 'worker.example'])).toBe(0);
     const printed = l.out.join('');
-    expect(printed).toContain("studio-relay-bootstrap.ps1))) -Pair 'studio-pair-1 lab ");
+    expect(printed).toContain("studio-relay-bootstrap.ps1').RawContentStream.ToArray()");
+    expect(printed).toContain("-Pair 'studio-pair-1 lab ");
     expect(printed).toContain('never over SSH');
     l.take();
     expect(await l.run(['pair', 'lab'], { connect: true })).toBe(0);
