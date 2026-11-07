@@ -33,7 +33,7 @@ const resolveAll = async (name: string): Promise<string[]> => {
  * resolved now (the firewall takes addresses only).
  */
 export async function lockdownFor(o: {
-  deny: { hosts: readonly string[]; ports: readonly number[] };
+  deny: { hosts: readonly string[]; ports: readonly number[]; prefixes?: readonly string[] };
   lookup?: (name: string) => Promise<string[]>;
   blockSmbLan?: boolean;
 }): Promise<LockdownPlan> {
@@ -46,6 +46,7 @@ export async function lockdownFor(o: {
     denyHosts: o.deny.hosts,
     resolved,
     denyPorts: o.deny.ports,
+    denyPrefixes: o.deny.prefixes ?? [],
     ...(o.blockSmbLan === true ? { blockSmbLan: true } : {}),
   });
 }
@@ -201,6 +202,8 @@ export function lockdownPlan(o: {
   /** Names of `deny.hosts` resolved by the caller: name to addresses (empty when it did not resolve). */
   resolved?: Readonly<Record<string, readonly string[]>>;
   denyPorts: readonly number[];
+  /** `deny.prefixes`: further networks, any family and length. */
+  denyPrefixes?: readonly string[];
   blockSmbLan?: boolean;
 }): LockdownPlan {
   const notes: string[] = [];
@@ -232,6 +235,12 @@ export function lockdownPlan(o: {
     }
     for (const x of got) add(addressSpan(x));
     notes.push(`deny.hosts ${h}: blocked at ${got.join(', ')} as it resolves now`);
+  }
+  for (const p of o.denyPrefixes ?? []) {
+    const s = entrySpan(p);
+    if (s === undefined)
+      notes.push(`deny.prefixes ${p}: not an address/prefix, so no firewall rule holds it`);
+    else add(s);
   }
   return {
     local: localSpans().map(spanText),
@@ -398,7 +407,8 @@ function LockdownCheck([string[]]$sids) {
   else {
     if ([string]$r[0].Enabled -ne 'True' -or [string]$r[0].Action -ne 'Block' -or [string]$r[0].Direction -ne 'Outbound') { $problems += 'the lockdown rule is not an enabled outbound block' }
     $who = [string]($r[0] | Get-NetFirewallSecurityFilter).LocalUser
-    foreach ($s in $sids) { if ($who -notlike "*$s*") { $problems += "the lockdown rule does not hold $s" } }
+    # The SID of an ACE whole (';<sid>)'), never a prefix of a longer one.
+    foreach ($s in $sids) { if (-not $who.Contains(';' + $s + ')')) { $problems += "the lockdown rule does not hold $s" } }
   }
   ,$problems
 }
@@ -569,7 +579,8 @@ export function judgeLockdown(s: LockdownState): string | undefined {
   if (rule.enabled !== 'True' || rule.action !== 'Block' || rule.direction !== 'Outbound') {
     return `the lockdown rule is not an enabled outbound block; ${fix}`;
   }
-  if (!rule.users.includes(s.me))
+  // The SID of an ACE whole (`;<sid>)`), never a prefix of a longer one.
+  if (!rule.users.includes(`;${s.me})`))
     return `the lockdown rule does not hold the relay account; ${fix}`;
   const held = rule.remote.flatMap((e) => {
     const x = entrySpan(e);

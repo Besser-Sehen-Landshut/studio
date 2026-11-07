@@ -31476,7 +31476,18 @@ var workerDenySchema = external_exports.strictObject({
       const problem = denyHostProblem(h2);
       if (problem !== void 0) ctx.addIssue({ code: "custom", message: problem });
     })
-  ).max(50).default([])
+  ).max(50).default([]),
+  // Windows lockdown: further networks the relay account and the crews must not reach, as
+  // address/prefix of either family (the delegated IPv6 /56 of the site, a VLAN the machine has
+  // no route to by itself). The local ranges and the routes of the machine are blocked anyway.
+  prefixes: external_exports.array(
+    external_exports.string().max(64).refine((p) => {
+      const m = /^([^/]+)\/(\d{1,3})$/.exec(p);
+      if (m === null) return false;
+      const bits = Number(m[2]);
+      return isIP(m[1]) === 4 ? bits <= 32 : isIP(m[1]) === 6 && bits <= 128;
+    }, "an address and a prefix length, like 2001:db8::/56")
+  ).max(50).optional()
 });
 var NO_DENY = { paths: [], ports: [], hosts: [] };
 var RELAY_HOST_RE = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^[0-9A-Fa-f:]{2,39}$/;
@@ -40608,6 +40619,7 @@ async function lockdownFor(o2) {
     denyHosts: o2.deny.hosts,
     resolved,
     denyPorts: o2.deny.ports,
+    denyPrefixes: o2.deny.prefixes ?? [],
     ...o2.blockSmbLan === true ? { blockSmbLan: true } : {}
   });
 }
@@ -40728,6 +40740,12 @@ function lockdownPlan(o2) {
     for (const x of got) add(addressSpan(x));
     notes.push(`deny.hosts ${h2}: blocked at ${got.join(", ")} as it resolves now`);
   }
+  for (const p of o2.denyPrefixes ?? []) {
+    const s = entrySpan(p);
+    if (s === void 0)
+      notes.push(`deny.prefixes ${p}: not an address/prefix, so no firewall rule holds it`);
+    else add(s);
+  }
   return {
     local: localSpans().map(spanText),
     hosts,
@@ -40841,7 +40859,8 @@ function LockdownCheck([string[]]$sids) {
   else {
     if ([string]$r[0].Enabled -ne 'True' -or [string]$r[0].Action -ne 'Block' -or [string]$r[0].Direction -ne 'Outbound') { $problems += 'the lockdown rule is not an enabled outbound block' }
     $who = [string]($r[0] | Get-NetFirewallSecurityFilter).LocalUser
-    foreach ($s in $sids) { if ($who -notlike "*$s*") { $problems += "the lockdown rule does not hold $s" } }
+    # The SID of an ACE whole (';<sid>)'), never a prefix of a longer one.
+    foreach ($s in $sids) { if (-not $who.Contains(';' + $s + ')')) { $problems += "the lockdown rule does not hold $s" } }
   }
   ,$problems
 }
@@ -40982,7 +41001,7 @@ function judgeLockdown(s) {
   if (rule.enabled !== "True" || rule.action !== "Block" || rule.direction !== "Outbound") {
     return `the lockdown rule is not an enabled outbound block; ${fix}`;
   }
-  if (!rule.users.includes(s.me))
+  if (!rule.users.includes(`;${s.me})`))
     return `the lockdown rule does not hold the relay account; ${fix}`;
   const held2 = rule.remote.flatMap((e) => {
     const x = entrySpan(e);
