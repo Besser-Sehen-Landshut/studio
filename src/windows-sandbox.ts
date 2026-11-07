@@ -13,7 +13,7 @@ import {
   rmdirSync,
   unlinkSync,
 } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CREW_PREFIX_RE,
@@ -314,10 +314,43 @@ export type RunFile = (
   opts?: { env?: Record<string, string>; timeoutMs?: number },
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
 
+/** Windows tools Studio starts, always from the system folder (never the cwd or a user PATH). */
+const SYSTEM_TOOLS = new Set([
+  'cmd',
+  'icacls',
+  'net',
+  'netsh',
+  'reg',
+  'robocopy',
+  'sc',
+  'schtasks',
+  'secedit',
+  'takeown',
+  'tasklist',
+  'whoami',
+]);
+
+/**
+ * The absolute path of a Windows system tool named bare: Node's spawn on Windows looks in the
+ * working directory first, so a powershell.exe planted in a download folder would run (with
+ * the rights of an elevated install). Anything else, and every other platform, as given.
+ */
+export function systemTool(
+  file: string,
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== 'win32') return file;
+  const name = file.toLowerCase().replace(/\.exe$/, '');
+  const sys = win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows', 'System32');
+  if (name === 'powershell') return win32.join(sys, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return SYSTEM_TOOLS.has(name) ? win32.join(sys, `${name}.exe`) : file;
+}
+
 export const runFile: RunFile = (file, args, opts = {}) =>
   new Promise((resolve) => {
     execFile(
-      file,
+      systemTool(file),
       args,
       {
         ...(opts.env === undefined ? {} : { env: opts.env }),
@@ -864,7 +897,7 @@ export const spawnKeeper: SpawnKeeper = async (o) => {
     // Never Node's `detached` (DETACHED_PROCESS): a PowerShell started so wrote nothing and never
     // ran its script on the Windows runner. `windowsHide` gives it a hidden console of its own,
     // which a closed terminal of the worker does not take down; `unref` lets the worker go on.
-    const child = spawn('powershell.exe', o.args, {
+    const child = spawn(systemTool('powershell.exe'), o.args, {
       env: o.env,
       stdio: ['pipe', fd, fd],
       windowsHide: true,

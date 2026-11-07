@@ -484,7 +484,10 @@ foreach ($sub in @('broker', 'config', 'setup-state', 'pairing')) { StrictFolder
 foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($groupSid, $rx, $tree, 'None')) }
 # The copies the forced command runs: never the files of an account that can change them, and no
 # junction of the source copied along.
-Copy-Item -LiteralPath ${psQuote(o.source.node)} -Destination ${psQuote(machineNode(o.machine))} -Force
+$nodeSource = ${psQuote(o.source.node)}
+if (-not (Test-Path -LiteralPath $nodeSource -PathType Leaf)) { throw "Node.js is not installed for all users ($nodeSource): winget install --id OpenJS.NodeJS.LTS --exact --scope machine, then run this again" }
+if ([string](& $nodeSource --version) -notmatch '^v(\\d+)\\.' -or [int]$Matches[1] -lt 24) { throw "Node.js in $nodeSource is older than 24: winget upgrade --id OpenJS.NodeJS.LTS --exact, then run this again" }
+Copy-Item -LiteralPath $nodeSource -Destination ${psQuote(machineNode(o.machine))} -Force
 & robocopy.exe ${psQuote(o.source.studio)} ${psQuote(machineStudio(o.machine))} /MIR /XJ /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LASTEXITCODE)" }
 icacls ${psQuote(machineStudio(o.machine))} /reset /T /C /L /Q | Out-Null
@@ -686,9 +689,13 @@ export const installRecordFile = (machine: string): string => join(machine, 'ins
  * first, before anything else of the setup. `$priorMachine` says whether the admin-only tree was
  * there already (an install of an earlier version, which recorded nothing).
  */
+/** The first line of every elevated script: the machine's PATH alone, never a folder of the user's. */
+export const MACHINE_PATH =
+  "# Only the machine's PATH: a folder of the user's PATH is writable without elevation.\n$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')\n";
+
 const PRIOR_CAPTURE = (
   machine: string,
-) => `# What this machine had before Studio changed it: the first install records it for uninstall.
+) => `${MACHINE_PATH}# What this machine had before Studio changed it: the first install records it for uninstall.
 function ServiceState([string]$name) {
   $s = Get-Service -Name $name -ErrorAction SilentlyContinue
   if ($null -eq $s) { return @{ exists = $false } }
@@ -742,16 +749,26 @@ function SshdOff {
 ${relayJobFunctions({ relayUser, crewPrefix, forceStop: i.forceStop === true, what: 'install' })}# Before sshd stops: a running job is refused while the lead can still reach it.
 NoRelayJob
 try {
-function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
+# Only the machine's PATH, also after an install: never a folder of the user's.
+function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') }
+# winget from its package in Program Files (administrators only), never the alias in the user's
+# WindowsApps folder.
+function Winget {
+  $apps = Join-Path $env:ProgramFiles 'WindowsApps'
+  @(Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe' -ErrorAction SilentlyContinue |
+    Sort-Object { try { [version]($_.Name.Split('_')[1]) } catch { [version]'0.0' } } -Descending |
+    ForEach-Object { Join-Path $_.FullName 'winget.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
+}
 function Need([string]$what, [scriptblock]$have, [string]$id) {
   if (& $have) { Write-Output "ok: $what"; return }
-  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "$what is missing and winget is not there to install it; install $what by hand" }
+  $wg = Winget
+  if (-not $wg) { throw "$what is missing and winget is not installed for the machine; install $what for all users by hand, then run this again" }
   Write-Output "installing: $what (winget $id)"
-  winget install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
+  & $wg install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
   Fresh
-  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it by hand" }
+  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it for all users by hand" }
 }
-Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
+Need 'Git' { Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }

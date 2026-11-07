@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, win32 } from 'node:path';
 import { crewClaudeDir } from './accounts.js';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import {
@@ -101,7 +101,7 @@ import {
 } from './relay-windows.js';
 import { elevated, machineTreeProblem, relayWindows } from './relay-windows-check.js';
 import { labelUsage, recordRun, USAGE_UNREADABLE } from './usage.js';
-import { findClaude, runFile } from './windows-sandbox.js';
+import { findClaude, runFile, systemTool } from './windows-sandbox.js';
 import { pinnedMain } from './worker.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { updateWorkers, workerCrewName } from './worker-lead.js';
@@ -872,7 +872,7 @@ export const scriptOfRun = (o: { input?: string } | undefined): string | undefin
 
 const systemExec: Exec = (file, args, o = {}) =>
   new Promise((res) => {
-    const child = spawn(file, args, {
+    const child = spawn(systemTool(file), args, {
       windowsHide: true,
       stdio: [o.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
@@ -921,7 +921,16 @@ function setupScriptFor(o: {
       ...(claude === undefined ? [] : [dirname(claude)]),
       ...loadOwnerConfig(o.owner).crewToolchainPaths,
     ],
-    source: { node: process.execPath, studio: resolve(dirname(STUDIO_BIN), '..') },
+    // Node.js for all users, where only administrators change it: never the node this CLI runs on,
+    // which may lie in a folder of the user's.
+    source: {
+      node: win32.join(
+        o.env.ProgramFiles ?? o.env.PROGRAMFILES ?? 'C:\\Program Files',
+        'nodejs',
+        'node.exe',
+      ),
+      studio: resolve(dirname(STUDIO_BIN), '..'),
+    },
     ...(o.install === undefined ? {} : { install: o.install }),
   });
 }
