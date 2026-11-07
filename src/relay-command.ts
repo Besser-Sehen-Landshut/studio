@@ -33,8 +33,9 @@ import { startEgressProxy } from './egress-proxy.js';
 import { HeldError } from './held.js';
 import { activeParks, blockHold, parkUntil, readLimits, writeLimits } from './limits.js';
 import { ensureStateDir, ownerStateRootFor, removeStateEntry, withBoardLock } from './paths.js';
-import { pinnedPlugins, STUDIO_VERSION } from './plugins.js';
+import { pinnedPlugins, STUDIO_REPOSITORY, STUDIO_VERSION } from './plugins.js';
 import type { Ports } from './ports.js';
+import { bootstrapCommand, leadAnchor } from './relay-bootstrap.js';
 import {
   collectRelay,
   followRelay,
@@ -831,6 +832,21 @@ export async function runRelayCommand(o: {
   if (sub === 'unpair' && args.length === 1) {
     return await unpair({ ...o, home, machine, relayUser, label: args[0] as string });
   }
+  if (sub === 'bootstrap' && args.length === 1 && args[0] === 'anchor') {
+    // What this Studio expects of its release's bootstrap and bundle (the release workflow checks
+    // the published assets against it).
+    o.stdout(
+      `${JSON.stringify({ version: STUDIO_VERSION, repository: STUDIO_REPOSITORY, ...leadAnchor() })}\n`,
+    );
+    return 0;
+  }
+  if (sub === 'bootstrap' && args.length === 1 && args[0] === 'uninstall') {
+    // The line that removes a relay worker with the bootstrap of this Studio, checked as for pairing.
+    o.stdout(
+      `On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH):\n  ${bootstrapCommand({ uninstall: true })}\n`,
+    );
+    return 0;
+  }
   if (sub === 'pair' && o.values.connect !== true && args.length === 2) {
     return await pairStart({ ...o, label: args[0] as string, host: args[1] as string });
   }
@@ -1212,7 +1228,7 @@ async function uninstall(o: {
     p.toLowerCase().startsWith(`${top}\\`) || p.toLowerCase().startsWith(`${top}/`);
   if (o.values['keep-tree'] !== true && (inside(process.execPath) || inside(STUDIO_BIN))) {
     throw new Error(
-      `relay uninstall cannot remove ${o.machine} while it runs from there: run it from another copy of Studio, or keep the tree with --keep-tree`,
+      `relay uninstall cannot remove ${o.machine} while it runs from there: run it from another copy of Studio (the bootstrap line with -Uninstall instead of -Pair), or keep the tree with --keep-tree`,
     );
   }
   const record = readInstallRecord(o.machine);
@@ -1341,8 +1357,9 @@ async function pairStart(o: {
     identityFile: key,
     createdAt: o.ports.clock.now().toISOString(),
   });
+  const line = renderPairLine({ label: o.label, secret, key: pub });
   o.stdout(
-    `On the worker, in an elevated PowerShell, within the hour:\n  studio relay install --pair "${renderPairLine({ label: o.label, secret, key: pub })}"\nThen here: studio relay pair ${o.label} --connect\nThe line holds a single-use secret: paste it on the worker only.\n`,
+    `On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH), within the hour:\n  ${bootstrapCommand({ pair: line })}\nIt installs Node.js and Git if missing (it asks first), Studio ${STUDIO_VERSION} and the relay worker.\nWith Studio there already: studio relay install --pair "${line}"\nThen here: studio relay pair ${o.label} --connect\nThe line holds a single-use secret: paste it on the worker only.\n`,
   );
   return 0;
 }
