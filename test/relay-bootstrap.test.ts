@@ -3,7 +3,14 @@
 // prints, and on the elevated windows-latest job the bootstrap itself.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -195,19 +202,30 @@ describe.skipIf(!elevated || assets === undefined)('the bootstrap on Windows', (
     ),
   );
   const pair = `studio-pair-1 lab ${'a'.repeat(43)} ssh-ed25519 ${'A'.repeat(68)}`;
-  const run = (args: string[], extra: Record<string, string> = {}) => {
+  // The runner's Node.js in Program Files is older than 24 (the job's own is elsewhere): a copy of
+  // the bootstrap runs with the job's Node.js and Git, so the later steps are reached.
+  const patched = () => {
+    const file = join(work, 'bootstrap-here.ps1');
+    const git = execFileSync('where.exe', ['git'], { encoding: 'utf8' }).split(
+      /\r?\n/,
+    )[0] as string;
+    writeFileSync(
+      file,
+      readFileSync(a.bootstrap, 'utf8')
+        .replace(/^\$nodeExe = .*$/m, `$nodeExe = '${process.execPath.replace(/'/g, "''")}'`)
+        .replace(/^\$gitExe = .*$/m, `$gitExe = '${git.trim().replace(/'/g, "''")}'`),
+    );
+    return file;
+  };
+  const staged = () =>
+    readdirSync(process.env.ProgramData ?? 'C:\\ProgramData').filter((f) =>
+      f.startsWith('studio-bootstrap-'),
+    );
+  const run = (args: string[], extra: Record<string, string> = {}, file = a.bootstrap) => {
     try {
       const out = execFileSync(
         'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          a.bootstrap,
-          ...args,
-        ],
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args],
         { encoding: 'utf8', env: { ...env, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] },
       );
       return { code: 0, out };
@@ -232,9 +250,12 @@ describe.skipIf(!elevated || assets === undefined)('the bootstrap on Windows', (
   it('refuses a bundle with another SHA-256, a line that is none, and an SSH session', () => {
     const other = join(work, 'other.zip');
     writeFileSync(other, 'not the bundle');
-    const bad = run(['-Pair', pair, '-Bundle', other]);
+    const before = staged().length;
+    const bad = run(['-Pair', pair, '-Bundle', other], {}, patched());
     expect(bad.code).not.toBe(0);
     expect(bad.out).toContain('nothing was installed');
+    // The admin-only staging folder it made is gone again.
+    expect(staged().length).toBe(before);
     expect(run(['-Pair', 'studio-pair-1 lab short']).out).toContain('that is not a pairing line');
     expect(run(['-Pair', pair], { SSH_CONNECTION: 'x 1 y 22' }).out).toContain(
       'runs in an SSH session',

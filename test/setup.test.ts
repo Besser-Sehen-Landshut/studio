@@ -84,13 +84,6 @@ function fixture(o: Opts = {}) {
   chmodSync(launcher, 0o755);
   const pathDirs = [join(base, 'sysbin')];
   mkdirSync(pathDirs[0] as string);
-  for (const tool of [
-    ...(o.noClaude ? [] : ['claude']),
-    ...(o.noSandbox ? [] : ['bwrap', 'socat']),
-  ]) {
-    writeFileSync(join(base, 'sysbin', tool), '#!/bin/sh\n');
-    chmodSync(join(base, 'sysbin', tool), 0o755);
-  }
   if (o.studioOnPath) {
     writeFileSync(join(base, 'sysbin', 'studio'), '#!/bin/sh\n');
     chmodSync(join(base, 'sysbin', 'studio'), 0o755);
@@ -98,15 +91,7 @@ function fixture(o: Opts = {}) {
   const localBin = join(home, '.local', 'bin');
   if (o.localBinOnPath) pathDirs.unshift(localBin);
   const env: Record<string, string | undefined> = {
-    // The system's PATH without any claude of this machine: the stand-in decides.
-    PATH: [
-      ...pathDirs,
-      ...(process.env.PATH ?? '')
-        .split(':')
-        .filter(
-          (d) => d !== '' && !['claude', 'bwrap', 'socat'].some((t) => existsSync(join(d, t))),
-        ),
-    ].join(':'),
+    PATH: [...pathDirs, process.env.PATH ?? ''].join(':'),
     XDG_STATE_HOME: join(home, 'state'),
     XDG_CONFIG_HOME: join(home, 'config'),
   };
@@ -152,7 +137,20 @@ function fixture(o: Opts = {}) {
   if (o.notified !== false)
     installNotifySecret({ transport: 'ntfy', topic: newNtfyTopic() }, owner);
   if (o.researchSkipped !== false) recordSetupSkip(ownerStateRootFor(owner), new Date());
-  return { base, project, home, env, owner, ports, launcher, localBin, tokens, pluginRuns, posts };
+  return {
+    base,
+    project,
+    home,
+    env,
+    owner,
+    ports,
+    launcher,
+    localBin,
+    tokens,
+    pluginRuns,
+    posts,
+    gone: [...(o.noClaude ? ['claude'] : []), ...(o.noSandbox ? ['bwrap', 'socat'] : [])],
+  };
 }
 type Fx = ReturnType<typeof fixture>;
 
@@ -202,6 +200,9 @@ async function setup(
     },
     launcher: fx.launcher,
     workerPlatform: io.platform ?? LINUX,
+    // What this machine has installed never decides: every tool is there unless the fixture
+    // takes it away.
+    which: (name) => (fx.gone.includes(name) ? undefined : `/usr/bin/${name}`),
   });
   return { code, out, err, asked, all: out + err };
 }

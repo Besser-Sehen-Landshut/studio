@@ -60,6 +60,8 @@ export type SetupOptions = {
   launcher?: string;
   /** The machine (tests); detected by default. */
   platform?: WorkerPlatform;
+  /** Where a program is on PATH (tests); the PATH of `env` by default. */
+  which?: (name: string) => string | undefined;
   stdout(s: string): void;
   stderr(s: string): void;
 };
@@ -443,6 +445,7 @@ const MIN_NODE_MAJOR = 24;
  */
 function machineStep(o: SetupOptions, platform: WorkerPlatform, kind: LeadKind): boolean {
   const say = (s: string) => o.stdout(`${safe(s)}\n`);
+  const which = o.which ?? ((name: string) => onPath(name, o.env));
   const problem = leadMachineProblem(kind, o.env);
   if (problem !== undefined) {
     say(`0. This machine: ${problem.why}`);
@@ -457,11 +460,10 @@ function machineStep(o: SetupOptions, platform: WorkerPlatform, kind: LeadKind):
         : 'Linux';
   const node = process.versions.node;
   const missing: LeadTool[] = [
-    ...(onPath('git', o.env) === undefined ? (['git'] as const) : []),
+    ...(which('git') === undefined ? (['git'] as const) : []),
     ...(Number(node.split('.')[0]) < MIN_NODE_MAJOR ? (['node'] as const) : []),
-    ...(onPath('claude', o.env) === undefined ? (['claude'] as const) : []),
-    ...(kind !== 'macos' &&
-    (onPath('bwrap', o.env) === undefined || onPath('socat', o.env) === undefined)
+    ...(which('claude') === undefined ? (['claude'] as const) : []),
+    ...(kind !== 'macos' && (which('bwrap') === undefined || which('socat') === undefined)
       ? (['sandbox'] as const)
       : []),
   ];
@@ -495,7 +497,7 @@ function machineStep(o: SetupOptions, platform: WorkerPlatform, kind: LeadKind):
       `   Note: the project ${o.project} is on a Windows drive; clone it into the Linux file system (under ~) for speed and exact file modes.`,
     );
   }
-  if (onPath('ssh', o.env) === undefined || onPath('ssh-keygen', o.env) === undefined) {
+  if (which('ssh') === undefined || which('ssh-keygen') === undefined) {
     say(`   For relay workers later: ssh and ssh-keygen (${installCommand('ssh', kind)}).`);
   }
   return true;
