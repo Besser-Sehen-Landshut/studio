@@ -3,6 +3,32 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.27.0] - 2026-11-07
+
+Easier and safer setup of Windows workers.
+
+### Added
+
+- One-line setup of a Windows relay worker: `studio relay pair` prints a line for an elevated PowerShell on the PC. It downloads the release's `studio-relay-bootstrap.ps1`, runs it only when its SHA-256 is the one the lead computes from its own Studio, and the bootstrap installs the release bundle only when its tree digest is the lead's. It installs Node.js and Git if missing (after a yes) and runs `relay install --pair`. No git clone, no GitHub account on the PC. `-Uninstall` (`studio relay bootstrap uninstall` prints the line), `-DryRun`. Every release carries the bootstrap and `studio-<version>.zip`; the release workflow checks both against `studio relay bootstrap anchor`.
+- Network lockdown on Windows workers, on by default: `studio relay install` (and `worker windows-setup` for the crew users' group) blocks the relay account and the crews from every local network in Windows Firewall (private IPv4, 100.64/10, link-local, multicast, broadcast, IPv6 unique-local and link-local, and every network of the routing table but the default route), turns `deny.hosts` and `deny.ports` into rules, and proves it with a throwaway user before sshd starts. Every relay start checks it again as the relay account (the rule, the profiles, every current network, IPv6, SMB, deny.hosts names resolved anew, and every deny entry in force inside the active rules: one added after the install holds the start). `deny.prefixes` names further networks (a delegated IPv6 prefix, say). `--block-smb-lan` closes SMB to the local networks for every account. `--no-firewall` opts out: doctor fails and nothing starts there unless the lead sets `accept_no_firewall: true`. Printer drivers are restricted to administrators (Point and Print). Replaces a separate lockdown script.
+- The deny list of your projects reaches a relay worker by itself: `studio relay pair <label>` carries the union of `workers.<label>.deny` (hosts, ports, prefixes) of every project on the lead in the pairing line, and the install adds it to the worker's `workers.serve.deny` and its firewall rules. The worker's proof at `--connect` covers the list it recorded.
+- `studio relay pair <label> --update-deny` prints a short line, signed with the lead's key for that worker, that adds a deny entry a project gained later; `studio relay update-deny <line>` (elevated, at the PC) checks it against that key, refuses a line not newer than the last, and rewrites only the firewall rules. Until then every start on that worker waits with that fix line. No line removes an entry.
+- `studio relay uninstall` on a Windows relay worker: removes everything `relay install` made, every lead's key and pairing first, then the broker tasks, the crew users (retired as after every job), their group, the relay account with its profile, Studio's sshd lines and firewall rules, and the admin-only tree and relay home (`--keep-tree` keeps them). Run it again to finish what an earlier run left; it removes only folders it can tell are Studio's (`--force-path` overrides) and names the `winget uninstall` commands for what it leaves installed.
+- A lead on a Windows PC: `studio setup` starts with a check of this machine. Native Windows and WSL1 get the command that leads to WSL2; missing tools get their install command (Ubuntu or macOS); under WSL2 Studio's own files must stay in the Linux file system. `studio relay pair` works from WSL2 and refuses to keep keys on a Windows drive. README: "Lead on a Windows PC (WSL2)".
+- `--dry-run` on `studio setup`, `account add` and `relay pair`, `install`, `uninstall` and `unpair`: what they would ask, write and change, nothing done. README: which setup for which machine.
+
+### Changed
+
+- Setup flows are friendlier: `studio setup`, `account add`, `relay pair`, `relay install` and `relay uninstall` speak German or English (your language setting or locale; `notify.language` wins), number their steps, name each fix with its command and end with what comes next. `relay pair --connect` checks the worker end to end right away. `studio init` names the install command of a missing tool for this machine.
+- `studio relay install` records what the machine had before it (WebClient, spooler, sshd, the OpenSSH server); uninstall turns a service back on only when that record says it was on.
+- The pairing line is `studio-pair-2`; pairing lines of earlier versions are refused. `relay install --pair -` reads the line from stdin, and the bootstrap passes it that way (no secret on a command line).
+
+### Security
+
+- On Windows, Studio starts system tools by their full path and takes the Windows folder from the kernel's `\SystemRoot` link and Program Files and ProgramData from HKLM (checked for drive, owner and not under `\Users`), never from the environment; elevated scripts use the machine `PATH` only, and the bootstrap clears `NODE_*` and `npm_config_*` before starting Node.js.
+- `relay install` and the start check refuse a folder above the relay's admin-only tree that anyone but administrators could empty, rename or re-own; the firewall rules of the lockdown are replaced new-before-old.
+- Elevated install and uninstall scripts no longer pass through the user's TEMP folder.
+
 ## [0.26.1] - 2026-11-07
 
 Hardening of the Windows crew broker.
