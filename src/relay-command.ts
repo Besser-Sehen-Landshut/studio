@@ -1150,6 +1150,15 @@ async function uninstall(o: {
       'relay uninstall stops sshd and removes the account the lead logs in as: run it at the machine or over remote desktop, never over SSH (--i-am-local if this is not an SSH session)',
     );
   }
+  // Node.js cannot delete the copy it runs from: removing the tree needs another copy of Studio.
+  const top = o.machine.toLowerCase().replace(/[\\/]+$/, '');
+  const inside = (p: string) =>
+    p.toLowerCase().startsWith(`${top}\\`) || p.toLowerCase().startsWith(`${top}/`);
+  if (o.values['keep-tree'] !== true && (inside(process.execPath) || inside(STUDIO_BIN))) {
+    throw new Error(
+      `relay uninstall cannot remove ${o.machine} while it runs from there: run it from another copy of Studio, or keep the tree with --keep-tree`,
+    );
+  }
   const record = readInstallRecord(o.machine);
   let settings: ReturnType<typeof serveSettings> | undefined;
   try {

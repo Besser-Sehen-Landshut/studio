@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { CREW_DESCRIPTION, TREE_SOURCE } from '../src/crew-accounts.js';
 import { realPorts } from '../src/ports.js';
@@ -286,6 +286,13 @@ describe('studio relay uninstall', () => {
     expect(s.scripts[0]).toContain("$relay = 'studio-relay'");
     expect(s.scripts[0]).toContain("$prefix = 'studio-crew'");
     expect(s.out.join('')).toContain('No install record here');
+  });
+
+  it('never removes the tree it runs from; with --keep-tree it may run there', async () => {
+    const s = setup();
+    const here = dirname(dirname(process.execPath));
+    await expect(s.run({}, { machine: here })).rejects.toThrow(/while it runs from there/);
+    expect(await s.run({ 'keep-tree': true }, { machine: here })).toBe(0);
   });
 
   it('refuses over SSH, unelevated and off Windows; a failed script says how to go on', async () => {
