@@ -32,7 +32,7 @@ import {
   POINT_AND_PRINT,
   POINT_AND_PRINT_KEY,
 } from './relay-lockdown.js';
-import { powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
+import { powershellEnv, psQuote, type RunFile, systemFolders } from './windows-sandbox.js';
 
 /** Every path here is a Windows path, also where tests run elsewhere (with POSIX folders). */
 const join = (...parts: string[]): string =>
@@ -44,7 +44,7 @@ const join = (...parts: string[]): string =>
  * above it, only administrators may change.
  */
 export const relayHomeDefault = (env: Record<string, string | undefined>): string =>
-  join(env.ProgramData ?? env.PROGRAMDATA ?? 'C:\\ProgramData', 'Studio', 'relay');
+  join(systemFolders(env).programData, 'Studio', 'relay');
 
 /**
  * The admin-only tree of a relay worker: the copies of Node.js and Studio the forced command runs,
@@ -52,7 +52,7 @@ export const relayHomeDefault = (env: Record<string, string | undefined>): strin
  * administrators write anything here; the relay account reads what it needs.
  */
 export const relayMachineDefault = (env: Record<string, string | undefined>): string =>
-  join(env.ProgramFiles ?? env.PROGRAMFILES ?? 'C:\\Program Files', 'Studio', 'relay');
+  join(systemFolders(env).programFiles, 'Studio', 'relay');
 
 /** The password of the current crew user, sealed for this machine. */
 export const machineCredFile = (machine: string): string => join(machine, 'crew-credential.bin');
@@ -315,17 +315,45 @@ icacls $target /setowner '*S-1-5-32-544' /L /Q | Out-Null`;
 }
 
 /**
+ * PowerShell function `AncestorProblem $path $trusted`: a folder above Studio's own (Program Files,
+ * ProgramData, the drive) must be owned by one of `$trusted` (administrators, SYSTEM,
+ * TrustedInstaller, and where the setup runs the administrator running it), and nobody else may
+ * delete, rename or re-own what lies in it (Delete, DeleteSubdirectoriesAndFiles, ChangePermissions,
+ * TakeOwnership, generic all or write, on the folder itself). Creating new entries stays allowed:
+ * ProgramData lets every user create files and folders by design, and a folder of Studio's made there
+ * before is caught by its owner. Returns the problem, or nothing.
+ */
+export const ANCESTOR_CHECK = String.raw`$ancestorDanger = [int64][Security.AccessControl.FileSystemRights]'Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+$ancestorDanger = $ancestorDanger -bor 0x10000000 -bor 0x40000000
+function AncestorProblem([string]$path, [string[]]$trusted) {
+  $acl = Get-Acl -LiteralPath $path
+  $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+  if ($trusted -notcontains $owner) { return "$path is owned by $owner, not by administrators, SYSTEM or TrustedInstaller" }
+  foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($r.AccessControlType -ne 'Allow') { continue }
+    if (($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+    $sid = $r.IdentityReference.Value
+    if ($trusted -contains $sid) { continue }
+    if (([int64]$r.FileSystemRights -band $ancestorDanger) -ne 0) { return "$path lets $sid delete, rename or re-own what lies in it" }
+  }
+}
+`;
+
+/**
  * The PowerShell functions of the setup that make and check Studio's folders: `SafeFolder` (no
  * reparse point on the way, no foreign owner), `StrictFolder` (a protected DACL built from scratch,
  * never handed down through a reparse point below) and `NoLinksIn` (no reparse point just below a
  * folder). Exported for the Windows CI.
  */
-export const FOLDER_FUNCTIONS = String.raw`$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+export const FOLDER_FUNCTIONS =
+  ANCESTOR_CHECK +
+  String.raw`$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
 # What may own a folder of Studio's before this run: administrators, SYSTEM, TrustedInstaller, or
 # the administrator running this script (who may own what it created on an earlier run).
 $ownerSids = $adminSids + @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
-# Every folder of Studio's, from the drive down: no reparse point anywhere, and none another account
-# owns (a folder planted there before would keep its owner's rights).
+# Every folder of Studio's, from the drive down: no reparse point anywhere, none another account
+# owns (a folder planted there before would keep its owner's rights), and above them none that
+# anyone but administrators could delete, rename or re-own the way out of (AncestorProblem).
 function SafeFolder([string]$path, [string]$top) {
   $walk = $path
   while ($walk) {
@@ -335,6 +363,10 @@ function SafeFolder([string]$path, [string]$top) {
       if ($walk.Length -gt $top.Length -and $walk.StartsWith($top, [StringComparison]::OrdinalIgnoreCase)) {
         $owner = (Get-Acl -LiteralPath $walk).GetOwner([Security.Principal.SecurityIdentifier]).Value
         if ($ownerSids -notcontains $owner) { throw "$walk is owned by $owner, not by administrators: remove it, then run this again" }
+      } else {
+        # Above Studio's folders, up to the drive: only administrators may take the way away.
+        $a = AncestorProblem $walk $ownerSids
+        if ($a) { throw "$($a): Studio's admin-only folders need a way down that only administrators control; fix that folder's owner or ACL, then run this again" }
       }
     }
     $up = Split-Path -Parent $walk
@@ -596,7 +628,12 @@ export function relayDenyScript(o: {
 $ErrorActionPreference = 'Stop'
 ${MACHINE_PATH}$relay = ${psQuote(o.relayUser)}
 $machine = ${psQuote(o.machine)}
-${crewAccountFunctions(o.crewPrefix, { treeSource: brokerPlaces(o.machine).treeSource, treeTemp: brokerPlaces(o.machine).treeTemp })}${relayJobFunctions({ relayUser: o.relayUser, crewPrefix: o.crewPrefix, forceStop: false, what: 'update-deny' })}Step 'no relay job may run while the rules are rewritten'
+${crewAccountFunctions(o.crewPrefix, { treeSource: brokerPlaces(o.machine).treeSource, treeTemp: brokerPlaces(o.machine).treeTemp })}${relayJobFunctions({ relayUser: o.relayUser, crewPrefix: o.crewPrefix, forceStop: false, what: 'update-deny' })}Step 'sshd paused, and no relay job may run while the rules are rewritten'
+# No lead can start a job while the rules change and the probe retires crew users: sshd stops
+# first, then no job may be running; sshd starts again at the end if it ran before.
+$sshdWas = [string](Get-Service -Name sshd -ErrorAction SilentlyContinue).Status
+Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
+try {
 NoRelayJob
 Step 'the relay account and the group of the crew users of the install'
 $u = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
@@ -616,6 +653,9 @@ icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySi
 if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $recordFile" }
 [IO.File]::Replace($tmp, $recordFile, [NullString]::Value)
 icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
+} finally {
+  if ($sshdWas -eq 'Running') { Start-Service -Name sshd }
+}
 `);
 }
 

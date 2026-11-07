@@ -153,6 +153,7 @@ export interface SetupStrings {
   updateDenyWhat: (set: string) => string;
   denyUpdated: (added: string, rules: boolean) => string;
   installDenyAdded: (added: string) => string;
+  systemFolders: (windows: string, programFiles: string, programData: string) => string;
   paired: (
     label: string,
     where: string,

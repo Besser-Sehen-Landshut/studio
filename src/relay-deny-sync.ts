@@ -14,7 +14,7 @@
 // edit of `workers.serve.deny` on the worker, then `relay install` again.
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { isMap, isSeq, parseDocument } from 'yaml';
 import { loadConfig, RELAY_HOST_KEY_RE, WORKER_LABEL_RE, workerDenySchema } from './config.js';
 import { markerProject } from './overview.js';
@@ -349,9 +349,14 @@ export function denyUpdateProblem(
   u: DenyUpdate,
   pairingKey: string | undefined,
   now: Date,
+  /** The time of the newest line this worker took for that label: a line must be newer. */
+  lastTaken?: number,
 ): string | undefined {
   if (pairingKey === undefined) {
     return `no lead ${u.label} is paired here: studio relay install --pair with its line first`;
+  }
+  if (lastTaken !== undefined && u.issuedAt <= lastTaken) {
+    return `the line is not newer than the last one this worker took for ${u.label} (${new Date(lastTaken * 1000).toISOString()}): run studio relay pair ${u.label} --update-deny on the lead again`;
   }
   const at = u.issuedAt * 1000;
   if (at > now.getTime() + 5 * 60_000 || now.getTime() - at > DENY_UPDATE_TTL_MS) {
@@ -368,4 +373,38 @@ export function denyUpdateProblem(
     return `the line is not signed with the key of lead ${u.label} that this worker authorized: nothing changed`;
   }
   return undefined;
+}
+
+/**
+ * Where a relay worker records, per lead, the time of the newest deny update it took: in the
+ * admin-only pairing folder (administrators write, the relay account reads). An older or equal
+ * line is refused, so a line seen once cannot be played again.
+ */
+export const denyUpdatesFile = (machine: string): string =>
+  join(machine, 'pairing', 'deny-updates.json');
+
+export function readDenyUpdates(machine: string): Record<string, number> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(denyUpdatesFile(machine), 'utf8'));
+  } catch {
+    return {};
+  }
+  const out: Record<string, number> = {};
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (WORKER_LABEL_RE.test(k) && Number.isInteger(v)) out[k] = v as number;
+    }
+  }
+  return out;
+}
+
+/** Records `issuedAt` for `label`, written whole and swapped in (run elevated). */
+export function recordDenyUpdate(machine: string, label: string, issuedAt: number): void {
+  const file = denyUpdatesFile(machine);
+  const all = { ...readDenyUpdates(machine), [label]: issuedAt };
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(all, null, 2)}\n`);
+  renameSync(tmp, file);
 }

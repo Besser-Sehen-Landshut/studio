@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
   closeSync,
@@ -138,7 +138,7 @@ export function windowsCrewEnv(o: {
  * makes and the elevated worker compiles, and the folder its compiler writes in.
  */
 export const nativeCrewDir = (env: Record<string, string | undefined>): string =>
-  join(env.ProgramFiles ?? env.PROGRAMFILES ?? 'C:\\Program Files', 'Studio crew');
+  join(systemFolders(env).programFiles, 'Studio crew');
 export const nativeCrewPlaces = (crewDir: string): { treeSource: string; treeTemp: string } => ({
   treeSource: join(crewDir, 'studio-tree.cs'),
   treeTemp: join(crewDir, 'tmp'),
@@ -363,6 +363,57 @@ export function windowsDirectory(): string {
   }
   windowsDir = dos;
   return dos;
+}
+
+let folders: { windows: string; programFiles: string; programData: string } | undefined;
+
+/**
+ * The Windows, Program Files and ProgramData folders of this machine as Windows knows them: the
+ * first from the kernel (`windowsDirectory`), the others from the known folders
+ * (`[Environment]::GetFolderPath`, asked of the system's PowerShell), never from `ProgramFiles`,
+ * `ProgramData` or `SystemRoot` of the environment, which a user can set for every process of theirs,
+ * elevated ones included (HKCU\\Environment). Throws when they cannot be read. Elsewhere (tests,
+ * and Linux and macOS, where nothing uses them) the environment's, with the usual defaults.
+ */
+export function systemFolders(
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+): { windows: string; programFiles: string; programData: string } {
+  if (platform !== 'win32') {
+    return {
+      windows: env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows',
+      programFiles: env.ProgramFiles ?? env.PROGRAMFILES ?? 'C:\\Program Files',
+      programData: env.ProgramData ?? env.PROGRAMDATA ?? 'C:\\ProgramData',
+    };
+  }
+  if (folders === undefined) folders = readSystemFolders();
+  return folders;
+}
+
+/** `systemFolders` on Windows, read anew (the child PowerShell inherits this process's environment). */
+export function readSystemFolders(): {
+  windows: string;
+  programFiles: string;
+  programData: string;
+} {
+  const windows = windowsDirectory();
+  const out = execFileSync(
+    systemTool('powershell.exe'),
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      "[Console]::Out.Write([Environment]::GetFolderPath('ProgramFiles') + '|' + [Environment]::GetFolderPath('CommonApplicationData'))",
+    ],
+    { encoding: 'utf8', windowsHide: true, timeout: 60_000, cwd: windows },
+  );
+  const [programFiles, programData] = out.trim().split('|');
+  for (const f of [programFiles, programData]) {
+    if (f === undefined || !/^[A-Za-z]:\\[^\\/:*?"<>|]/.test(f)) {
+      throw new Error(`Windows names no Program Files or ProgramData folder (${out.trim()})`);
+    }
+  }
+  return { windows, programFiles: programFiles as string, programData: programData as string };
 }
 
 /**
@@ -1205,7 +1256,7 @@ export async function probeWindowsResults(
         script: keeperFile(o.stateRoot),
         credFile: o.grants.credFile,
         node: o.node ?? process.execPath,
-        cwd: o.env.SystemRoot ?? o.env.SYSTEMROOT ?? 'C:\\Windows',
+        cwd: systemFolders(o.env).windows,
         out: files.out,
         err: files.err,
         user: account.user,

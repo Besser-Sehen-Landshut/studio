@@ -54,6 +54,8 @@ import {
   EMPTY_DENY,
   leadDenyFor,
   parseDenyUpdate,
+  readDenyUpdates,
+  recordDenyUpdate,
   renderDenyUpdate,
   sshsigBlob,
   unionDeny,
@@ -127,7 +129,7 @@ import {
 import { elevated, machineTreeProblem, relayWindows } from './relay-windows-check.js';
 import { setupText } from './setup-text.js';
 import { labelUsage, recordRun, USAGE_UNREADABLE } from './usage.js';
-import { findClaude, runFile, systemTool } from './windows-sandbox.js';
+import { findClaude, runFile, systemFolders, systemTool } from './windows-sandbox.js';
 import { pinnedMain } from './worker.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { updateWorkers, workerCrewName } from './worker-lead.js';
@@ -651,11 +653,7 @@ export function readHostKey(
 ): string | undefined {
   const file =
     platform === 'win32'
-      ? join(
-          env.ProgramData ?? env.PROGRAMDATA ?? 'C:\\ProgramData',
-          'ssh',
-          'ssh_host_ed25519_key.pub',
-        )
+      ? join(systemFolders(env).programData, 'ssh', 'ssh_host_ed25519_key.pub')
       : '/etc/ssh/ssh_host_ed25519_key.pub';
   try {
     return keyscanKey(`host ${readFileSync(file, 'utf8')}`);
@@ -980,7 +978,12 @@ async function updateDeny(o: {
   elevated?: () => Promise<boolean | undefined>;
 }): Promise<number> {
   const u = parseDenyUpdate(o.line);
-  const problem = denyUpdateProblem(u, readPairings(o.machine)[u.label]?.key, o.ports.clock.now());
+  const problem = denyUpdateProblem(
+    u,
+    readPairings(o.machine)[u.label]?.key,
+    o.ports.clock.now(),
+    readDenyUpdates(o.machine)[u.label],
+  );
   if (problem !== undefined) throw new Error(problem);
   const t = setupText({ owner: o.owner, env: o.env });
   const record = readInstallRecord(o.machine);
@@ -992,6 +995,15 @@ async function updateDeny(o: {
     return 0;
   }
   await windowsAdmin({ ...o, what: 'update-deny' });
+  // sshd stops while the rules change: over SSH it would cut its own session off.
+  if (
+    o.values['i-am-local'] !== true &&
+    (sshSessionVar(o.env) || (await underSshd(o.exec ?? systemExec)))
+  ) {
+    throw new Error(
+      'relay update-deny stops sshd while it runs: run it at the machine or over remote desktop, never over SSH (--i-am-local if this is not an SSH session)',
+    );
+  }
   if (record === undefined)
     throw new Error('no install record here: run studio relay install first');
   const config = join(machineConfig(o.machine), 'studio', 'config.yaml');
@@ -1015,6 +1027,7 @@ async function updateDeny(o: {
     }
   }
   const added = addToServeDeny(config, u.deny, DEFAULT_SERVE_CONFIG);
+  recordDenyUpdate(o.machine, u.label, u.issuedAt);
   o.stdout(`${t.denyUpdated(denyText(added), record.firewall !== false)}\n`);
   return 0;
 }
@@ -1140,11 +1153,7 @@ function setupScriptFor(o: {
     // Node.js for all users, where only administrators change it: never the node this CLI runs on,
     // which may lie in a folder of the user's.
     source: {
-      node: win32.join(
-        o.env.ProgramFiles ?? o.env.PROGRAMFILES ?? 'C:\\Program Files',
-        'nodejs',
-        'node.exe',
-      ),
+      node: win32.join(systemFolders(o.env).programFiles, 'nodejs', 'node.exe'),
       studio: resolve(dirname(STUDIO_BIN), '..'),
     },
     ...(o.install === undefined ? {} : { install: o.install }),
@@ -1299,10 +1308,16 @@ async function install(o: {
       );
     }
     o.stdout(`${t.dryRun}\n`);
+    const f = systemFolders(o.env);
+    o.stdout(`${t.systemFolders(f.windows, f.programFiles, f.programData)}\n`);
     for (const line of installPlan(o)) o.stdout(`${t.would(line)}\n`);
     return 0;
   }
   await windowsAdmin({ ...o, what: 'install' });
+  {
+    const f = systemFolders(o.env);
+    o.stdout(`${t.systemFolders(f.windows, f.programFiles, f.programData)}\n`);
+  }
   // sshd is stopped while the install runs: over SSH it would cut its own session off.
   if (o.values['i-am-local'] !== true && (sshSessionVar(o.env) || (await underSshd(exec)))) {
     throw new Error(

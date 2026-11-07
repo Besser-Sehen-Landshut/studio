@@ -384,11 +384,15 @@ StrictFolder ${q(path)} ${rules}`);
       join(home, 'state'),
       `@(@($relaySid, 'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize', 'None', 'None'), @($relaySid, 'Modify, Synchronize', $tree, 'InheritOnly'))`,
     );
+    // The temp folders above lie in the runner account's profile: it is trusted there as the
+    // administrator who made them.
+    const me = ps('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value').trim();
     const tree = {
       machine,
       home,
       node: join(machine, 'node', 'node.exe'),
       studioBin: join(machine, 'studio', 'bin', 'studio'),
+      trustedOwners: [me],
     };
     expect(await machineTreeProblem(runFile, tree)).toBeUndefined();
     // A junction in the config, or just below state, is refused.
@@ -407,5 +411,34 @@ StrictFolder ${q(path)} ${rules}`);
     expect(await machineTreeProblem(runFile, tree)).toBeUndefined();
     ps(`icacls ${q(join(home, 'state'))} /grant '*S-1-5-32-545:(M)' /Q | Out-Null`);
     expect(await machineTreeProblem(runFile, tree)).toMatch(/writable by S-1-5-32-545/);
+    ps(`icacls ${q(join(home, 'state'))} /remove:g '*S-1-5-32-545' /Q | Out-Null`);
+    expect(await machineTreeProblem(runFile, tree)).toBeUndefined();
+    // A folder above the tree owned by another account, or one that lets another account delete
+    // what lies in it, is refused.
+    ps(`icacls ${q(join(base, 'pf'))} /setowner '*S-1-5-32-545' /Q | Out-Null`);
+    expect(await machineTreeProblem(runFile, tree)).toMatch(/pf is owned by S-1-5-32-545/);
+    ps(`icacls ${q(join(base, 'pf'))} /setowner '*${me}' /Q | Out-Null`);
+    ps(`icacls ${q(join(base, 'pd'))} /grant '*S-1-5-32-545:(DC)' /Q | Out-Null`);
+    expect(await machineTreeProblem(runFile, tree)).toMatch(
+      /pd lets S-1-5-32-545 delete, rename or re-own/,
+    );
+    ps(`icacls ${q(join(base, 'pd'))} /remove:g '*S-1-5-32-545' /Q | Out-Null`);
+    expect(await machineTreeProblem(runFile, tree)).toBeUndefined();
   }, 180_000);
+
+  it('the setup refuses a folder above its own that another account owns or may empty', () => {
+    const anc = join(base, 'anc');
+    const top = join(anc, 'top');
+    ps(`New-Item -ItemType Directory -Path ${q(top)} -Force | Out-Null`);
+    const safe = () =>
+      ps(`$ErrorActionPreference = 'Stop'
+${FOLDER_FUNCTIONS}
+SafeFolder ${q(join(top, 'studio'))} ${q(top)}`);
+    safe();
+    ps(`icacls ${q(anc)} /setowner '*S-1-5-32-545' /Q | Out-Null`);
+    expect(safe).toThrow(/anc is owned by S-1-5-32-545/);
+    ps(`icacls ${q(anc)} /setowner '*S-1-5-32-544' /Q | Out-Null`);
+    ps(`icacls ${q(anc)} /grant '*S-1-5-32-545:(DE,DC)' /Q | Out-Null`);
+    expect(safe).toThrow(/anc lets S-1-5-32-545 delete, rename or re-own/);
+  }, 120_000);
 });

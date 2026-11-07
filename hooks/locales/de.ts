@@ -483,6 +483,8 @@ export default defineLocale({
       denyUpdated: (added, rules) =>
         `Fertig. workers.serve.deny: ${added === 'nothing' ? 'nichts Neues' : `ergänzt um ${added}`}${rules ? '; die Firewall-Regeln halten es' : ' (keine Sperre hier: --no-firewall)'}. Relay-Starts gehen weiter.`,
       installDenyAdded: (added) => `workers.serve.deny: ${added} aus der Kopplungszeile ergänzt`,
+      systemFolders: (w, pf, pd) =>
+        `Systemordner (von Windows, nicht aus der Umgebung): Windows ${w}, Programme ${pf}, ProgramData ${pd}`,
       paired: (label, where, studio, platform, fp) =>
         `gekoppelt: ${label} ist ${where}, Studio ${studio} auf ${platform}, Host-Schlüssel festgelegt (${fp}).`,
       installWebClient:

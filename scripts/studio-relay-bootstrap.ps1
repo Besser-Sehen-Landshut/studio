@@ -230,6 +230,14 @@ try {
     # Nothing of this session's environment steers Node.js or npm: no NODE_OPTIONS (preloads),
     # NODE_PATH, NODE_EXTRA_CA_CERTS or any other NODE_* and npm_config_*.
     foreach ($k in @(Get-ChildItem Env: | Where-Object { $_.Name -like 'NODE_*' -or $_.Name -like 'npm_config_*' } | ForEach-Object { $_.Name })) { Remove-Item -LiteralPath "Env:$k" -ErrorAction SilentlyContinue }
+    # The system's folders, as Windows knows them, for Node.js and everything it starts: a value of
+    # the user's (HKCU\Environment) would steer where the install looks and writes.
+    $windowsDir = [Environment]::GetFolderPath('Windows')
+    $env:ProgramFiles = $programFiles
+    $env:ProgramData = $programData
+    $env:ALLUSERSPROFILE = $programData
+    $env:SystemRoot = $windowsDir
+    $env:windir = $windowsDir
     # The pairing line goes to relay install on its stdin, never on a command line (which process
     # creation auditing, event 4688, would log with its secret).
     if ($Uninstall) { & $nodeExe $studio @args2 } else { $Pair | & $nodeExe $studio @args2 }

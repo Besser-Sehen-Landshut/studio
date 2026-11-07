@@ -471,6 +471,8 @@ const strings: Strings = {
     denyUpdated: (added, rules) =>
       `Done. workers.serve.deny: ${added === 'nothing' ? 'nothing new' : `added ${added}`}${rules ? '; the firewall rules hold it' : ' (no lockdown here: --no-firewall)'}. Relay starts go on.`,
     installDenyAdded: (added) => `workers.serve.deny: added ${added} from the pairing line`,
+    systemFolders: (w, pf, pd) =>
+      `system folders (from Windows, not the environment): Windows ${w}, Program Files ${pf}, ProgramData ${pd}`,
     paired: (label, where, studio, platform, fp) =>
       `paired: ${label} is ${where}, Studio ${studio} on ${platform}, host key pinned (${fp}).`,
     installWebClient:

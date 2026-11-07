@@ -21,6 +21,7 @@ import {
   encodeDeny,
   leadDenyFor,
   parseDenyUpdate,
+  readDenyUpdates,
   renderDenyUpdate,
   sshsigBlob,
   sshsigHolds,
@@ -42,7 +43,7 @@ import {
   writePairings,
 } from '../src/relay-pair.js';
 import { installRecordFile, machineConfig, relayDenyScript } from '../src/relay-windows.js';
-import { systemTool, windowsDirectory } from '../src/windows-sandbox.js';
+import { readSystemFolders, systemTool, windowsDirectory } from '../src/windows-sandbox.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-deny-sync-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -416,9 +417,21 @@ describe('a deny entry added later holds the start; the --update-deny line fixes
     await expect(worker(tampered)).rejects.toThrow(/not signed/);
     expect(scripts).toEqual([]);
     expect(await worker(line), wout.join('')).toBe(0);
+    // The same line again, or an older one, is refused: the worker took a newer one already.
+    await expect(worker(line)).rejects.toThrow(/not newer than the last one/);
+    expect(readDenyUpdates(machine).lab).toBe(u.issuedAt);
     expect(scripts[0]).toContain('$lockPorts = @(5432, 6379)');
     expect(scripts[0]).toContain('NoRelayJob');
-    expect(scripts[0]).not.toContain('sshd');
+    // sshd pauses first (no lead can start a job meanwhile), starts again only if it ran; the
+    // sshd config stays as it is.
+    const script = scripts[0] as string;
+    expect(script.indexOf('Stop-Service -Name sshd')).toBeLessThan(script.indexOf('NoRelayJob\n'));
+    expect(script).toContain("if ($sshdWas -eq 'Running') { Start-Service -Name sshd }");
+    expect(script).not.toContain('sshd_config');
+    // New rules first, the old ones after.
+    expect(script.indexOf("New-NetFirewallRule @base -Name ('StudioLockdown-local-'")).toBeLessThan(
+      script.indexOf('$old | Remove-NetFirewallRule'),
+    );
     const config = readFileSync(join(machineConfig(machine), 'studio', 'config.yaml'), 'utf8');
     for (const x of ['nas.example', '5432', '6379']) expect(config).toContain(x);
     // The rules the update wrote hold what the projects deny: the start goes on.
@@ -429,6 +442,25 @@ describe('a deny entry added later holds the start; the --update-deny line fixes
 });
 
 describe.skipIf(process.platform !== 'win32')('the scripts parse in Windows PowerShell', () => {
+  it('Program Files and ProgramData come from the system, whatever the environment says', () => {
+    const real = readSystemFolders();
+    const keys = [
+      'ProgramFiles',
+      'ProgramData',
+      'SystemRoot',
+      'windir',
+      'ALLUSERSPROFILE',
+    ] as const;
+    const before = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    try {
+      for (const k of keys) process.env[k] = 'C:\\Users\\Public\\fake';
+      expect(readSystemFolders()).toEqual(real);
+    } finally {
+      for (const k of keys) process.env[k] = before[k];
+    }
+    expect(real.programFiles.toLowerCase()).toBe((before.ProgramFiles ?? '').toLowerCase());
+    expect(real.programData.toLowerCase()).toBe((before.ProgramData ?? '').toLowerCase());
+  });
   it("the Windows folder is the kernel's \\SystemRoot, whatever the environment says", () => {
     const before = { SystemRoot: process.env.SystemRoot, windir: process.env.windir };
     const real = windowsDirectory();

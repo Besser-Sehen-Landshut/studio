@@ -126,6 +126,11 @@ describe('the bootstrap template', () => {
     const clean = template.indexOf("$_.Name -like 'NODE_*' -or $_.Name -like 'npm_config_*'");
     expect(clean).toBeGreaterThan(0);
     expect(clean).toBeLessThan(template.indexOf('& $nodeExe $studio'));
+    for (const v of ['ProgramFiles', 'ProgramData', 'ALLUSERSPROFILE', 'SystemRoot', 'windir']) {
+      const at = template.indexOf(`$env:${v} = `);
+      expect(at, v).toBeGreaterThan(0);
+      expect(at, v).toBeLessThan(template.indexOf('& $nodeExe $studio'));
+    }
   });
 
   it('every file of the bundle has a name the bootstrap takes', () => {
@@ -159,7 +164,8 @@ describe('the bootstrap template', () => {
     expect(template.indexOf('$fs.Dispose()')).toBeGreaterThan(template.indexOf('$in.CopyTo($out)'));
     expect(template).toContain("$nodeExe = Join-Path $programFiles 'nodejs\\node.exe'");
     expect(template).toContain("$programFiles = [Environment]::GetFolderPath('ProgramFiles')");
-    expect(template).not.toMatch(/\$env:(ProgramFiles|ProgramData|SystemRoot|windir)/i);
+    // Never read from the environment; only set (for Node.js) from the system's values.
+    expect(template).not.toMatch(/\$env:(ProgramFiles|ProgramData|SystemRoot|windir)\b(?! = )/i);
     expect(template).not.toContain("GetEnvironmentVariable('Path', 'User')");
     expect(template).toContain('[IO.Directory]::Delete($work, $true)');
     expect(template).not.toMatch(/-Recurse/);

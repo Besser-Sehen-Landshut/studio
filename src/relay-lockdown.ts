@@ -385,17 +385,21 @@ $lockLocal = ${list(plan.local)}
 $lockHosts = ${list(plan.hosts)}
 $lockPorts = ${list(plan.ports)}
 $lockSmbLan = ${plan.blockSmbLan ? '$true' : '$false'}
-${ROUTE_FUNCTIONS}function LockdownRules([string[]]$sids) {
-  Get-NetFirewallRule -Group $lockGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+${ROUTE_FUNCTIONS}# The new rules first, under names of their own, and only then the old ones go: there is never a
+# moment without a rule (for a while both block). A rule that cannot be made leaves the old ones.
+function LockdownRules([string[]]$sids) {
+  $old = @(Get-NetFirewallRule -Group $lockGroup -ErrorAction SilentlyContinue)
+  $tag = [Guid]::NewGuid().ToString('N')
   $who = 'D:' + (($sids | ForEach-Object { "(A;;CC;;;$_)" }) -join '')
   $base = @{ Group = $lockGroup; Direction = 'Outbound'; Action = 'Block'; Profile = 'Any' }
   $routes = @(LocalRoutes)
-  New-NetFirewallRule @base -LocalUser $who -DisplayName ${psQuote(LOCKDOWN_RULE)} -RemoteAddress ($lockLocal + $lockHosts + $routes) | Out-Null
+  New-NetFirewallRule @base -Name ('StudioLockdown-local-' + $tag) -LocalUser $who -DisplayName ${psQuote(LOCKDOWN_RULE)} -RemoteAddress ($lockLocal + $lockHosts + $routes) | Out-Null
   foreach ($p in @('TCP', 'UDP')) {
-    if ($lockPorts.Count -gt 0) { New-NetFirewallRule @base -LocalUser $who -DisplayName $(if ($p -eq 'TCP') { ${psQuote(lockdownPortsRule('TCP'))} } else { ${psQuote(lockdownPortsRule('UDP'))} }) -Protocol $p -RemotePort ([string[]]$lockPorts) | Out-Null }
+    if ($lockPorts.Count -gt 0) { New-NetFirewallRule @base -Name ('StudioLockdown-ports-' + $p + '-' + $tag) -LocalUser $who -DisplayName $(if ($p -eq 'TCP') { ${psQuote(lockdownPortsRule('TCP'))} } else { ${psQuote(lockdownPortsRule('UDP'))} }) -Protocol $p -RemotePort ([string[]]$lockPorts) | Out-Null }
   }
   # --block-smb-lan: SMB to the local networks for every account, the owner's own shares included.
-  if ($lockSmbLan) { New-NetFirewallRule @base -DisplayName ${psQuote(SMB_LAN_RULE)} -Protocol TCP -RemotePort @('445', '139') -RemoteAddress ($lockLocal + $routes) | Out-Null }
+  if ($lockSmbLan) { New-NetFirewallRule @base -Name ('StudioLockdown-smb-' + $tag) -DisplayName ${psQuote(SMB_LAN_RULE)} -Protocol TCP -RemotePort @('445', '139') -RemoteAddress ($lockLocal + $routes) | Out-Null }
+  if ($old.Count -gt 0) { $old | Remove-NetFirewallRule }
 }
 # The rules as Windows applies them: present, on, blocking, bound to every SID; every firewall
 # profile on and taking local rules. Returns the problems.
