@@ -20,6 +20,7 @@ import { type Exec, runRelayCommand } from '../src/relay-command.js';
 import { readPairings, writePairings } from '../src/relay-pair.js';
 import {
   type InstallRecord,
+  LSA_RIGHTS,
   parseInstallRecord,
   RELAY_DESCRIPTION,
   relayUninstallScript,
@@ -411,11 +412,10 @@ New-Item -ItemType Junction -Path ${q(join(home, 'state', 'link'))} -Target ${q(
       sshdRule: false,
       grant: false,
     });
-    const cfg = join(work, 'rights.inf');
-    ps(
-      `for ($k = 0; $k -lt 5 -and -not (Test-Path -LiteralPath ${q(cfg)}); $k++) { secedit /export /cfg ${q(cfg)} /areas USER_RIGHTS | Out-Null; if (-not (Test-Path -LiteralPath ${q(cfg)})) { Start-Sleep -Seconds 2 } }`,
+    // The group holds no logon right any more (LSA, as the uninstall removes them).
+    expect(ps(`Add-Type -TypeDefinition ${q(LSA_RIGHTS)}; [StudioLsa]::Count('${groupSid}')`)).toBe(
+      '0',
     );
-    expect(readFileSync(cfg, 'utf16le')).not.toContain(groupSid);
     expect(existsSync(machine)).toBe(false);
     expect(existsSync(home)).toBe(false);
     // The link in state was removed as a link: what it pointed to is untouched.

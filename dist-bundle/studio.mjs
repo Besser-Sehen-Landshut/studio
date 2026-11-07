@@ -64188,6 +64188,55 @@ function restoreSteps(record2) {
   return `${out.join("\n")}
 `;
 }
+var LSA_RIGHTS = String.raw`using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+public static class StudioLsa {
+  [StructLayout(LayoutKind.Sequential)]
+  struct Attributes { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes_; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+  [DllImport("advapi32.dll")] static extern uint LsaOpenPolicy(IntPtr system, ref Attributes attributes, uint access, out IntPtr policy);
+  [DllImport("advapi32.dll")] static extern uint LsaRemoveAccountRights(IntPtr policy, byte[] sid, [MarshalAs(UnmanagedType.U1)] bool all, IntPtr rights, uint count);
+  [DllImport("advapi32.dll")] static extern uint LsaEnumerateAccountRights(IntPtr policy, byte[] sid, out IntPtr rights, out uint count);
+  [DllImport("advapi32.dll")] static extern uint LsaFreeMemory(IntPtr buffer);
+  [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
+  [DllImport("advapi32.dll")] static extern int LsaNtStatusToWinError(uint status);
+  const uint NotFound = 0xC0000034;
+  static IntPtr Open() {
+    var a = new Attributes();
+    a.Length = Marshal.SizeOf(a);
+    IntPtr h;
+    uint st = LsaOpenPolicy(IntPtr.Zero, ref a, 0x000F0FFF, out h);
+    if (st != 0) throw new Win32Exception(LsaNtStatusToWinError(st));
+    return h;
+  }
+  static byte[] Bytes(string sid) {
+    var s = new SecurityIdentifier(sid);
+    var b = new byte[s.BinaryLength];
+    s.GetBinaryForm(b, 0);
+    return b;
+  }
+  public static void RemoveAll(string sid) {
+    IntPtr h = Open();
+    try {
+      uint st = LsaRemoveAccountRights(h, Bytes(sid), true, IntPtr.Zero, 0);
+      if (st != 0 && st != NotFound) throw new Win32Exception(LsaNtStatusToWinError(st));
+    } finally { LsaClose(h); }
+  }
+  public static int Count(string sid) {
+    IntPtr h = Open();
+    try {
+      IntPtr rights;
+      uint count;
+      uint st = LsaEnumerateAccountRights(h, Bytes(sid), out rights, out count);
+      if (st == NotFound) return 0;
+      if (st != 0) throw new Win32Exception(LsaNtStatusToWinError(st));
+      LsaFreeMemory(rights);
+      return (int)count;
+    } finally { LsaClose(h); }
+  }
+}
+`;
 var UNINSTALL_STEPS = 9;
 function relayUninstallScript(o2) {
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser)) {
@@ -64235,30 +64284,10 @@ ${step(5, "the crew users' group, its firewall rule, logon rights and read grant
 if ($null -ne $group) {
   $groupSid = $group.SID.Value
   Get-NetFirewallRule -DisplayName ('Studio crews ' + $group.Name + ': no direct network') -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-  $cfg = Join-Path $env:TEMP ('studio-rights-' + [Guid]::NewGuid().ToString('N') + '.inf')
-  $db = [IO.Path]::ChangeExtension($cfg, '.sdb')
-  # secedit can be busy right after another run of it: a few tries, then its own words.
-  $said = ''
-  for ($k = 0; $k -lt 5 -and -not (Test-Path -LiteralPath $cfg); $k++) {
-    $said = (secedit /export /cfg $cfg /areas USER_RIGHTS 2>&1 | Out-String).Trim()
-    if (-not (Test-Path -LiteralPath $cfg)) { Start-Sleep -Seconds 2 }
-  }
-  if (-not (Test-Path -LiteralPath $cfg)) { throw "secedit could not export the logon rights: $said" }
-  $lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cfg)
-  $changed = $false
-  for ($k = 0; $k -lt $lines.Count; $k++) {
-    if ($lines[$k] -match '^(SeDenyBatchLogonRight|SeDenyServiceLogonRight|SeDenyNetworkLogonRight|SeDenyRemoteInteractiveLogonRight) = (.*)$') {
-      $keep = @($Matches[2].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne "*$groupSid" })
-      $line = $Matches[1] + ' = ' + ($keep -join ',')
-      if ($line -ne $lines[$k]) { $lines[$k] = $line; $changed = $true }
-    }
-  }
-  if ($changed) {
-    Set-Content -LiteralPath $cfg -Value $lines -Encoding Unicode
-    secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS /quiet | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "secedit could not take the crew users' group out of the logon rights ($LASTEXITCODE)" }
-  }
-  Remove-Item -LiteralPath $cfg, $db -ErrorAction SilentlyContinue
+  # Every logon right the group holds (Studio gave it only the denied ones), straight through LSA:
+  # secedit's export fails on some machines with an extended error.
+  Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(LSA_RIGHTS, "utf8").toString("base64")}')))
+  [StudioLsa]::RemoveAll($groupSid)
   foreach ($p in $readPaths) {
     if (Test-Path -LiteralPath $p) { icacls $p /remove:g "*$groupSid" /L /Q | Out-Null }
   }
