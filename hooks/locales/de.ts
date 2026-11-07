@@ -320,6 +320,182 @@ export default defineLocale({
     reaNotConfirmed:
       'Die REA-Bestätigung ließ sich nicht speichern; studio research install im eigenen Terminal ausführen.',
 
+    setup: {
+      step: (k, name, status) => `${k}. ${name}: ${status}`,
+      stepOpen: (k, name) => `${k}. ${name}:`,
+      done: (d) => `erledigt (${d})`,
+      fix: (what) => `   Behebung: ${what}`,
+      dryRun: 'Probelauf: nichts wird geschrieben, gespeichert oder geändert.',
+      would: (what) => `   würde: ${what}`,
+      next: (what) => `Fertig. Als Nächstes: ${what}`,
+
+      machine: 'Dieser Rechner',
+      windowsWhy:
+        'die Steuerung läuft nicht unter Windows selbst (Claude Code hat dort keine Sandbox)',
+      windowsFix:
+        'in PowerShell als Administrator: wsl --install -d Ubuntu-24.04, den PC neu starten, Ubuntu öffnen und dort studio setup ausführen (README, "Lead on a Windows PC (WSL2)")',
+      wsl1Why:
+        'das ist WSL1 (oder eine WSL, deren Version sich nicht bestimmen lässt); die Steuerung braucht WSL2',
+      wsl1Fix: (d) =>
+        `in PowerShell: wsl --set-version ${d} 2, dann neu öffnen und studio setup ausführen`,
+      otherWhy: 'diese Plattform wird nicht unterstützt',
+      otherFix: 'die Steuerung unter macOS, Linux oder WSL2 betreiben',
+      missing: (label, list) => `${label}; es fehlt: ${list}`,
+      nodeOld: (min, have) => `Node.js ${min} (vorhanden: ${have})`,
+      sandboxTools: 'bubblewrap und socat (die Sandbox von Claude Code)',
+      tool: (name, command) => `   ${name}: ${command}`,
+      newTerminal: '   Danach ein neues Terminal öffnen und studio setup erneut ausführen.',
+      onWindowsDrive: (label, folder, dir) =>
+        `${label}; Studios ${folder === 'config' ? 'Konfigurations' : 'Zustands'}ordner ${dir} liegt auf einem Windows-Laufwerk, das keine Dateirechte kennt (Tokens und Schlüssel dort wären offen)`,
+      onWindowsDriveFix:
+        '   Behebung: XDG_CONFIG_HOME und XDG_STATE_HOME entfernen oder unter ~ im Linux-Dateisystem setzen, dann studio setup erneut ausführen.',
+      machineDone: (label, node) => `erledigt (${label}, git, Node.js ${node}, claude)`,
+      projectOnWindows: (p) =>
+        `   Hinweis: das Projekt ${p} liegt auf einem Windows-Laufwerk; für Tempo und genaue Dateirechte ins Linux-Dateisystem (unter ~) klonen.`,
+      sshLater: (command) => `   Für Relay-Worker später: ssh und ssh-keygen (${command}).`,
+
+      gh: 'GitHub CLI',
+      ghFix: (fix) => `   Behebung: ${fix}, dann studio setup erneut ausführen.`,
+      ghInstall: (command) => `${command}, dann gh auth login`,
+
+      token: 'Crew-Token',
+      unusable: 'die gespeicherte Datei ist nicht verwendbar',
+      missingWord: 'fehlt',
+      tokenText: [
+        '   Crews pushen ihre Branches und öffnen Pull Requests mit einem eigenen GitHub-Token, nie',
+        '   mit deinem gh-Login. Lege auf GitHub ein fine-grained Token an (Settings, Developer settings,',
+        '   Personal access tokens), beschränkt auf die Repositories dieses Projekts, mit',
+        '   contents und pull requests read/write und sonst nichts (keine administration, keine workflows).',
+        '   Studio prüft es einmal gegen das Repository und speichert es mit Modus 0600; es wird nie angezeigt.',
+        '   Das Token kommt nur in die verdeckte Eingabe.',
+      ],
+      noRepo:
+        '   Hier ist kein GitHub-Repository zu finden. Die nächste Eingabe ist sichtbar; das Token kommt danach.',
+      repoPrompt: '   Repository, an dem die Crews arbeiten, als owner/name (sichtbar): ',
+      repoLooksLikeToken:
+        '   das sieht nach einem Token aus — nicht gespeichert; bitte owner/name eingeben',
+      repoNotOwnerName: '   das ist kein owner/name; nichts gespeichert',
+      tokenNothing:
+        '   Nichts gespeichert. Token auf GitHub korrigieren, dann studio setup erneut ausführen.',
+
+      account: 'Claude-Konto für Crews',
+      accountWrong: '   studio account list und studio doctor zeigen, was nicht stimmt.',
+      noneStored: 'keins gespeichert',
+      accountText: (def) => [
+        '   Crews betreiben Claude Code mit einem eigenen Token, dein eigener Login bleibt deiner. In einem',
+        '   anderen Terminal-Tab ausführen: claude setup-token',
+        '   Es gibt ein Token aus, das ein Jahr gilt (es braucht einen Pro-, Max-, Ultra-, Team- oder Enterprise-Plan).',
+        `   Zuerst tippst du ein kurzes Kürzel für dieses Konto (sichtbar; Enter behält ${def}).`,
+        '   Dann fügst du das Token in der zweiten Eingabe ein (verdeckt).',
+      ],
+      labelPrompt: (def) =>
+        `   Kurzes Kürzel für dieses Konto, sichtbar (Enter behält ${def}) [${def}]: `,
+      labelLooksLikeToken:
+        '   das sieht nach einem Token aus — nicht gespeichert; bitte ein kurzes Kürzel eingeben',
+      labelBad:
+        '   ein Kürzel hat Buchstaben, Ziffern, Punkt, Bindestrich oder Unterstrich und beginnt nicht mit einem Punkt; nichts gespeichert',
+
+      terminal: 'studio in deinem Terminal',
+      noPlugin: 'der Ort des Plugins ist nicht bestimmbar; nichts geschrieben',
+      localBinOff: '~/.local/bin steht nicht im PATH.',
+      localBinHelp: [
+        '   Studio ändert keine Shell-Dateien. ~/.local/bin in der Startdatei deiner Shell zum PATH',
+        '   hinzufügen, ein neues Terminal öffnen und studio setup --link erneut ausführen.',
+      ],
+      untilThen: (command) => `   Bis dahin: ${command}`,
+      shimNote:
+        '   Der Shim findet das Plugin nach einem Update wieder; --link ist kein zweites Mal nötig.',
+      notAShim: (target) => `${target} ist kein Studio-Shim; nichts geändert.`,
+      notAShimHelp: '   Wegräumen und studio setup --link erneut ausführen, oder behalten.',
+      writePrompt: (target) => `   Studio-Shim ${target} schreiben? [J/n] `,
+      updatePrompt: (target) => `   Studio-Shim ${target} aktualisieren? [J/n] `,
+      nothingWritten: (command) => `   nichts geschrieben; bis dahin: ${command}`,
+      wrote: (target) => `   ${target} geschrieben`,
+      notOnPath: 'nicht im PATH (Claude Code findet es selbst).',
+      linkHint: '   Für studio in jedem Terminal: studio setup --link',
+      untilParen: (command) => `   (bis dahin: ${command})`,
+
+      notifications: 'Benachrichtigungen',
+      notifyConfigBad: [
+        'die Owner-Konfiguration ist nicht lesbar; mit studio doctor beheben, dann',
+        '   studio setup --notifications ausführen. Nichts gespeichert.',
+      ],
+      notifyState: (state, transport) =>
+        state === 'bad'
+          ? 'die gespeicherte Datei ist nicht verwendbar'
+          : state === 'ok'
+            ? `eingerichtet (${transport}), neu einrichten`
+            : 'keine',
+      notifyText: [
+        '   Studio kann dir eine Zeile aufs Telefon schicken, wenn eine Entscheidung ansteht: eine feste',
+        '   Phrase, die Item-ID und den Projektnamen, sonst nichts. Dafür dient ntfy, ohne Konto: Studio',
+        '   legt ein geheimes Topic an, du abonnierst es in der ntfy-App.',
+      ],
+      notifyPrompt: '   ntfy oder none? [ntfy/none] (Enter: ntfy): ',
+      notifyNone: (unchanged) =>
+        `   ${unchanged ? 'unverändert' : 'keine Benachrichtigungen'}; später: studio setup --notifications`,
+      notifyAnswer: '   bitte ntfy oder none antworten; nichts gespeichert',
+      noHttps: '   kein HTTPS-Client in diesem Prozess; nichts gespeichert',
+      notifyOpen: '   Installiere die ntfy-App und öffne diesen Link:',
+      notifySecret:
+        '   Der Link ist das Geheimnis: wer ihn hat, liest deine Pushes. Studio zeigt ihn nur hier.',
+      notifyReady: '   Enter drücken, sobald abonniert (skip bricht ab): ',
+      notifyLater: '   nichts gespeichert; später: studio setup --notifications',
+      notifyFailed: (why) => `   Test-Push fehlgeschlagen: ${why}; nichts gespeichert`,
+      notifySent: '   Test-Push gesendet; schau aufs Telefon. Topic gespeichert.',
+
+      research: 'Reverse Engineering',
+      researchOptional: 'Reverse Engineering (optional)',
+      researchConfigBad:
+        'die Owner-Konfiguration ist nicht lesbar; mit studio doctor beheben. Nichts geändert.',
+      researchDone: (version, mode, roots) => `erledigt (rea-agents ${version}, ${mode}, ${roots})`,
+      trustMode: 'Vertrauensmodus',
+      strictMode: 'strenger Modus',
+      researchSkipped: 'übersprungen; studio setup research richtet es ein',
+      notSetUp: 'nicht eingerichtet',
+      researchText: [
+        '   Eine Researcher-Crew kann ausgelieferte Programme mit REA (rea-agents) untersuchen. Studio',
+        '   installiert es einmal in seinen eigenen Zustand, geprüft gegen die npm-Registry, und gibt ihm',
+        '   einen Analyseordner. REA-Werkzeuge laufen mit deinen Rechten außerhalb der Sandbox. Überspringe',
+        '   es, wenn du es nie brauchst: Studio fragt wieder, wenn ein Researcher-Item es braucht.',
+      ],
+      researchPrompt: '   Jetzt einrichten? [j/N] ',
+      researchLater: '   übersprungen; später: studio setup research',
+      researchInstalled: (version, mode, now) =>
+        `   erledigt (rea-agents ${version}, ${mode}${now ? ', jetzt installiert' : ''})`,
+
+      finalNext: 'Fertig. Jetzt das Projekt in Claude Code öffnen und /studio:init ausführen.',
+
+      pairPc:
+        'Auf dem Windows-PC, in einer PowerShell als Administrator (am PC oder per Remotedesktop, nie per SSH), innerhalb einer Stunde:',
+      pairWhat: (version) =>
+        `Sie installiert Node.js und Git, falls sie fehlen (sie fragt vorher), Studio ${version} und den Relay-Worker.`,
+      pairHasStudio: (command) => `Ist Studio dort schon installiert: ${command}`,
+      pairThen: (command) => `Danach hier: ${command}`,
+      pairSecret: 'Die Zeile enthält ein Einmal-Geheimnis: nur auf dem Worker einfügen.',
+      paired: (label, where, studio, platform, fp) =>
+        `gekoppelt: ${label} ist ${where}, Studio ${studio} auf ${platform}, Host-Schlüssel festgelegt (${fp}).`,
+      installWebClient:
+        'Studio relay install: stoppt und deaktiviert den Dienst WebClient (WebDAV), den die Crew-Sandbox nicht hält.',
+      installStopped:
+        'studio: relay install angehalten; beheben, was es sagt, und erneut ausführen (es repariert)',
+      hostKey: (fp) => `Fingerabdruck des Host-Schlüssels: ${fp}`,
+      hostKeyUnknown: 'Host-Schlüssel: der Schlüssel des OpenSSH-Servers ist nicht lesbar',
+      installNext: (label) =>
+        `Fertig. Als Nächstes, auf der Steuerung innerhalb einer Stunde: studio relay pair ${label} --connect`,
+      uninstallNoRecord:
+        'Kein Installationsprotokoll (Installation einer früheren Version): Dienste, die Studio gestoppt hat, bleiben, wie sie sind.',
+      uninstallStopped:
+        'studio: relay uninstall angehalten; beheben, was es sagt, und studio relay uninstall erneut ausführen (es macht dort weiter)',
+      uninstallNext: (leads) =>
+        leads.length === 0
+          ? 'Fertig. Als Nächstes: auf der Steuerung diesen Worker aus workers.relay der Owner-Konfiguration entfernen.'
+          : `Fertig. Als Nächstes: auf jeder Steuerung ${leads.map((l) => `workers.relay.${l}`).join(', ')} aus der Owner-Konfiguration entfernen.`,
+      accountStored: (label, active) => `Konto ${label} gespeichert${active ? ' und aktiv' : ''}`,
+      accountNext:
+        'Fertig. Als Nächstes: studio doctor zeigt das Konto; studio setup erledigt die übrigen Schritte.',
+    },
+
     push: {
       fix_limit: 'Fix-Limit erreicht',
       changes_requested: 'Änderungen angefordert',

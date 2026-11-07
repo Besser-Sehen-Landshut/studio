@@ -516,7 +516,43 @@ function sample(t: Strings): Record<keyof Strings, unknown> {
     pushOne: t.pushOne(t.push.fix_limit, 'APP-3', 'app'),
     pushMany: [t.pushMany(1, 'app', false), t.pushMany(3, 'app', true)],
     pushTest: t.pushTest,
+    setup: sampleSetup(t.setup),
   };
+}
+
+/** Every setup text with sample values; the few that branch, each way. */
+function sampleSetup(s: Strings['setup']): Record<string, unknown> {
+  const special: Record<string, unknown> = {
+    notifyState: [
+      s.notifyState('bad', 'ntfy'),
+      s.notifyState('ok', 'ntfy'),
+      s.notifyState('none', ''),
+    ],
+    onWindowsDrive: [
+      s.onWindowsDrive('WSL2', 'config', '/mnt/c/x'),
+      s.onWindowsDrive('WSL2', 'state', '/mnt/c/y'),
+    ],
+    uninstallNext: [s.uninstallNext([]), s.uninstallNext(['lab', 'lab-2'])],
+    accountStored: [s.accountStored('main', true), s.accountStored('main', false)],
+    notifyNone: [s.notifyNone(true), s.notifyNone(false)],
+    researchInstalled: [
+      s.researchInstalled('6.7.0', 'trust mode', true),
+      s.researchInstalled('6.7.0', 'trust mode', false),
+    ],
+    step: s.step(2, 'Name', 'status'),
+    stepOpen: s.stepOpen(4, 'Name'),
+    nodeOld: s.nodeOld(24, '22.1.0'),
+  };
+  return Object.fromEntries(
+    Object.entries(s).map(([k, v]) => [
+      k,
+      k in special
+        ? special[k]
+        : typeof v === 'function'
+          ? (v as (...a: string[]) => unknown)('A', 'B', 'C', 'D', 'E')
+          : v,
+    ]),
+  );
 }
 
 describe('snapshots of every text', () => {
