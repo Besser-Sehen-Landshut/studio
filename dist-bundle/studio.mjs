@@ -65820,6 +65820,13 @@ async function uninstall(o2) {
       "relay uninstall stops sshd and removes the account the lead logs in as: run it at the machine or over remote desktop, never over SSH (--i-am-local if this is not an SSH session)"
     );
   }
+  const top = o2.machine.toLowerCase().replace(/[\\/]+$/, "");
+  const inside = (p) => p.toLowerCase().startsWith(`${top}\\`) || p.toLowerCase().startsWith(`${top}/`);
+  if (o2.values["keep-tree"] !== true && (inside(process.execPath) || inside(STUDIO_BIN))) {
+    throw new Error(
+      `relay uninstall cannot remove ${o2.machine} while it runs from there: run it from another copy of Studio, or keep the tree with --keep-tree`
+    );
+  }
   const record2 = readInstallRecord(o2.machine);
   let settings;
   try {
