@@ -85,11 +85,12 @@ import {
   relayCall,
   sshTransport,
 } from './relay-transport.js';
-import { readInstallRecord, relayUninstallScript } from './relay-uninstall.js';
+import { readInstallRecord, relayUninstallScript, treePathProblem } from './relay-uninstall.js';
 import {
   authorizedKeysFile,
   authorizedKeysScript,
   forcedCommand,
+  installRecordFile,
   leadFromAuthInfo,
   machineConfig,
   type RelayInstall,
@@ -817,6 +818,7 @@ export interface RelayValues {
   'force-stop'?: boolean;
   'disable-spooler'?: boolean;
   'keep-tree'?: boolean;
+  'force-path'?: boolean;
   pair?: string;
   user?: string;
   port?: string;
@@ -1121,6 +1123,22 @@ async function uninstall(o: {
     );
   }
   const record = readInstallRecord(o.machine);
+  const home = o.home ?? record?.home ?? relayHomeDefault(o.env);
+  if (o.values['keep-tree'] !== true && o.values['force-path'] !== true) {
+    const problem = treePathProblem({
+      home,
+      machine: o.machine,
+      recordedHome: record?.home,
+      defaultHome: relayHomeDefault(o.env),
+      defaultMachine: relayMachineDefault(o.env),
+      machineMarked: existsSync(installRecordFile(o.machine)),
+    });
+    if (problem !== undefined) {
+      throw new Error(
+        `relay uninstall removes no tree it cannot tell is Studio's: ${problem}. Check --home and the path, or keep the trees with --keep-tree (--force-path removes them all the same)`,
+      );
+    }
+  }
   let settings: ReturnType<typeof serveSettings> | undefined;
   try {
     settings = serveSettings(relayOwner(o.owner, o.home ?? relayHomeDefault(o.env), o.machine));
@@ -1132,11 +1150,12 @@ async function uninstall(o: {
     relayUser: o.relayUser ?? record?.relayUser ?? 'studio-relay',
     crewPrefix: record?.crewPrefix ?? settings?.windows?.crewUser ?? 'studio-crew',
     task: record?.task ?? settings?.windows?.broker ?? 'Studio relay broker',
-    home: o.home ?? record?.home ?? relayHomeDefault(o.env),
+    home,
     machine: o.machine,
     readPaths: record?.readPaths ?? [],
     keepTree: o.values['keep-tree'] === true,
     forceStop: o.values['force-stop'] === true,
+    forcePath: o.values['force-path'] === true,
     record,
     treeSource: TREE_SOURCE(),
   });

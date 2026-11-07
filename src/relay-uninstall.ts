@@ -16,6 +16,7 @@ import {
   machineCredFile,
   machineStudio,
   relayJobFunctions,
+  SSHD_SWAP,
 } from './relay-windows.js';
 import { psQuote } from './windows-sandbox.js';
 
@@ -260,6 +261,39 @@ export interface UninstallOptions {
   treeSource: string;
   /** sshd_config; the one of the OpenSSH server by default (tests give another). */
   sshdConfig?: string;
+  /** `--force-path`: remove the trees also where their path does not end in `Studio\relay`. */
+  forcePath?: boolean;
+}
+
+/**
+ * Whether the two trees may be removed: the relay home must be the one the install recorded (or the
+ * default), the admin-only tree the default or one holding the install's record; neither a drive
+ * root nor a folder whose path does not end in `Studio\relay`. Undefined when they may.
+ */
+export function treePathProblem(o: {
+  home: string;
+  machine: string;
+  recordedHome: string | undefined;
+  defaultHome: string;
+  defaultMachine: string;
+  machineMarked: boolean;
+}): string | undefined {
+  const norm = (p: string) => p.replace(/[\\/]+$/, '').toLowerCase();
+  for (const p of [o.home, o.machine]) {
+    if (/^[a-z]:$/i.test(norm(p)) || norm(p) === '' || !/[\\/]studio[\\/]relay$/.test(norm(p))) {
+      return `${p} is not a folder Studio\\relay`;
+    }
+  }
+  if (
+    norm(o.home) !== norm(o.recordedHome ?? o.defaultHome) &&
+    norm(o.home) !== norm(o.defaultHome)
+  ) {
+    return `${o.home} is not the relay home the install recorded (${o.recordedHome ?? o.defaultHome})`;
+  }
+  if (norm(o.machine) !== norm(o.defaultMachine) && !o.machineMarked) {
+    return `${o.machine} holds no install record of Studio's`;
+  }
+  return undefined;
 }
 
 /** How many steps the uninstall shows; each prints `[n/STEPS]`. */
@@ -295,7 +329,7 @@ $machine = ${psQuote(o.machine)}
 $readPaths = @(${o.readPaths.map(psQuote).join(', ')})
 ${crewAccountFunctions(o.crewPrefix, { treeSource: adminCopy })}# The tree deleter from the admin-only copy, or once that is gone, from the Studio running this.
 if (-not (Test-Path -LiteralPath $treeSource)) { $treeSource = ${psQuote(o.treeSource)} }
-${relayJobFunctions({ relayUser: o.relayUser, crewPrefix: o.crewPrefix, forceStop: o.forceStop, what: 'uninstall' })}
+${relayJobFunctions({ relayUser: o.relayUser, crewPrefix: o.crewPrefix, forceStop: o.forceStop, what: 'uninstall', owned: true })}${SSHD_SWAP}$forcePath = ${o.forcePath === true ? '$true' : '$false'}
 ${step(1, 'leads: every key and pairing goes, so no lead can log in')}
 foreach ($f in @(${psQuote(authorizedKeysFile(o.machine))}, ${psQuote(join(o.machine, 'pairing', 'pairings.json'))})) {
   if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force; Write-Output "removed: $f" }
@@ -333,14 +367,23 @@ if ($null -ne $group) {
 ${step(6, 'the relay account and its profile')}
 $account = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
 if ($null -ne $account -and $account.Description -ne ${psQuote(RELAY_DESCRIPTION)}) {
-  Write-Output "left as it is: the user $relay, which Studio did not make (its description is not Studio's)"
+  # A user Studio did not make served as its relay account (an earlier version took it over): it is
+  # disabled, never deleted.
+  Disable-LocalUser -SID $account.SID
+  Write-Output "WARNING: the user $relay was not made by Studio but served as its relay account: it is DISABLED, not removed. Remove it, or turn it back on yourself: Enable-LocalUser -Name $relay"
 } elseif ($null -ne $account) {
   LoadTree
   LockJobUser $account
-  foreach ($p in @(Owned @($account.SID.Value) | Where-Object { -not $_.Unreadable })) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-  Start-Sleep -Milliseconds 800
-  $still = @(Owned @($account.SID.Value) | Where-Object { -not $_.Unreadable })
-  if ($still.Count -gt 0) { throw "processes of $relay still run ($(@($still | ForEach-Object { "$($_.Id) $($_.Name)" }) -join ', ')): run studio relay uninstall --force-stop" }
+  # Every process of the account, and every one whose owner cannot be read (it may be the
+  # account's): nothing goes on while one runs, unless --force-stop ends them by PID.
+  $still = @(Owned @($account.SID.Value))
+  for ($t = 0; $t -lt 5 -and $still.Count -gt 0; $t++) {
+    foreach ($p in $still) { if ($forceStop -or -not $p.Unreadable) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+    Start-Sleep -Milliseconds 800
+    $still = @(Owned @($account.SID.Value))
+    if (-not $forceStop -and @($still | Where-Object { -not $_.Unreadable }).Count -eq 0) { break }
+  }
+  if ($still.Count -gt 0) { throw "processes of $relay (or whose owner cannot be read) still run ($(@($still | ForEach-Object { if ($_.Unreadable) { "$($_.Id) $($_.Name) (owner unreadable)" } else { "$($_.Id) $($_.Name)" } }) -join ', ')): run studio relay uninstall --force-stop" }
   QuarantineProfile $account (Join-Path (Quarantine) 'trees')
   Remove-LocalUser -SID $account.SID
   Write-Output "removed: the relay account $relay and its profile"
@@ -364,13 +407,7 @@ if (Test-Path -LiteralPath $conf) {
   $text = [regex]::Replace($text, '(?s)# studio relay begin global.*?# studio relay end global\\r?\\n?', '')
   $text = [regex]::Replace($text, '(?s)\\r?\\n?# studio relay begin\\r?\\n.*?# studio relay end\\r?\\n?', [Environment]::NewLine)
   if ($text -ne [Text.Encoding]::UTF8.GetString($before)) {
-    [IO.File]::WriteAllText($conf, $text.TrimEnd() + [Environment]::NewLine, (New-Object Text.UTF8Encoding $false))
-    $exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'
-    # sshd checks a config only with its host keys; without them it never ran with this one.
-    if ((Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath (Join-Path $env:ProgramData 'ssh\\ssh_host_ed25519_key'))) {
-      $tested = Start-Process -FilePath $exe -ArgumentList @('-t', '-f', ('"' + $conf + '"')) -Wait -PassThru -NoNewWindow
-      if ($tested.ExitCode -ne 0) { [IO.File]::WriteAllBytes($conf, $before); throw "sshd does not accept $conf without Studio's lines; it was put back as it was" }
-    }
+    SshdConfigSwap $conf ($text.TrimEnd() + [Environment]::NewLine) $false
     Write-Output "removed: Studio's lines in $conf"
   }
 }
@@ -382,6 +419,9 @@ ${
     : `foreach ($p in @($home_, $machine)) {
   $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
   if ($null -eq $item) { continue }
+  # Never a drive root, never a folder that is not Studio's relay folder, whatever was recorded.
+  $bare = $p.TrimEnd('\\', '/')
+  if (-not $forcePath -and ($bare -eq ([IO.Path]::GetPathRoot($p)).TrimEnd('\\', '/') -or $bare -notmatch '[\\\\/]Studio[\\\\/]relay$')) { throw "$p is not a folder Studio\\relay: nothing of it is removed (--force-path removes it all the same)" }
   if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { $item.Delete() } else { LoadTree; [StudioTree]::Remove($p, $null) }
   Write-Output "removed: $p"
   $up = Split-Path -Parent $p

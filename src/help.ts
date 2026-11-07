@@ -95,7 +95,7 @@ export const COMMANDS: HelpEntry[] = [
   },
   {
     usage:
-      'relay uninstall [--keep-tree] [--force-stop] [--user <name>] [--home <dir>] [--i-am-local]',
+      'relay uninstall [--keep-tree] [--force-stop] [--force-path] [--user <name>] [--home <dir>] [--i-am-local]',
     about:
       'On a Windows worker, elevated: remove everything relay install made, every lead first; run again to finish',
   },

@@ -703,10 +703,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       values['i-am-local'],
       values['force-stop'],
       values['keep-tree'],
+      values['force-path'],
     ];
     if (relayOnly.some((v) => v !== undefined) && cmd !== 'relay') {
       throw new UsageError(
-        '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop and --keep-tree work with relay only',
+        '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop, --keep-tree and --force-path work with relay only',
       );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
@@ -5461,6 +5462,7 @@ function parseCli(argv: string[]) {
         'force-stop': { type: 'boolean' },
         'disable-spooler': { type: 'boolean' },
         'keep-tree': { type: 'boolean' },
+        'force-path': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,
