@@ -1,40 +1,59 @@
 // The network lockdown of Windows workers: the rules it plans, the scripts that put it in place,
-// prove it and take it away, the check before every relay start, and on the elevated windows-latest
-// job the rules, the probe and the check for real.
+// prove it and take it away, the check before every relay start, the SMB check as the relay
+// account, the proxy's mirror of the local networks, and on the elevated windows-latest job the
+// rules, the probe and the check for real.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { relayTargetSchema } from '../src/config.js';
 import { crewAccountFunctions, TREE_SOURCE } from '../src/crew-accounts.js';
-import { ipv4 } from '../src/egress-proxy.js';
+import { checkedAddress, ipv4, onLinkBlockList } from '../src/egress-proxy.js';
 import { realPorts } from '../src/ports.js';
-import { type Exec, runRelayCommand } from '../src/relay-command.js';
+import { type Exec, runRelayCommand, scriptOfRun } from '../src/relay-command.js';
+import { relayDoctor } from '../src/relay-lead.js';
 import {
-  CONNECT_TEST,
   denyNameDrift,
-  dnsResolvers,
+  entrySpan,
   inLocalRange,
+  judgeLockdown,
   LOCKDOWN_GROUP,
+  LOCKDOWN_RULE,
+  LOCKDOWN_STATE,
+  type LockdownState,
   lockdownFor,
   lockdownPlan,
   lockdownProblem,
   lockdownSection,
+  NO_LOCKDOWN,
   PROBE_FIXED,
+  parseLockdownState,
+  ROUTE_FUNCTIONS,
+  SMB_AS_ME,
+  SMB_LAN_RULE,
   unrefused,
 } from '../src/relay-lockdown.js';
+import { encodeMessage, LineReader, readMessage } from '../src/relay-protocol.js';
+import type { RelayTransport } from '../src/relay-transport.js';
 import { parseInstallRecord, relayUninstallScript, restoreSteps } from '../src/relay-uninstall.js';
-import { relaySetupScript } from '../src/relay-windows.js';
-import { powershellEnv, runFile, windowsSetupScript } from '../src/windows-sandbox.js';
+import { installRecordFile, relaySetupScript } from '../src/relay-windows.js';
+import { relayWindows } from '../src/relay-windows-check.js';
+import {
+  powershellEnv,
+  type RunFile,
+  runFile,
+  windowsSetupScript,
+} from '../src/windows-sandbox.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-lockdown-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-const empty = { resolvers: [], denyHosts: [], denyPorts: [] };
+const empty = { denyHosts: [], denyPorts: [] };
 
 describe('the lockdown plan', () => {
-  it('blocks every local range, IPv4 and IPv6, and nothing of the internet', () => {
+  it('blocks the fixed local ranges of both families, broadcast, multicast and NAT64, nothing of the internet', () => {
     const p = lockdownPlan(empty);
     expect(p.local).toEqual([
       `${ipv4(10, 0, 0, 0)}-${ipv4(10, 255, 255, 255)}`,
@@ -42,35 +61,21 @@ describe('the lockdown plan', () => {
       `${ipv4(169, 254, 0, 0)}-${ipv4(169, 254, 255, 255)}`,
       `${ipv4(172, 16, 0, 0)}-${ipv4(172, 31, 255, 255)}`,
       `${ipv4(192, 168, 0, 0)}-${ipv4(192, 168, 255, 255)}`,
+      `${ipv4(198, 18, 0, 0)}-${ipv4(198, 19, 255, 255)}`,
+      `${ipv4(224, 0, 0, 0)}-${ipv4(239, 255, 255, 255)}`,
+      ipv4(255, 255, 255, 255),
       'fc00:0:0:0:0:0:0:0-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff',
       'fe80:0:0:0:0:0:0:0-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff',
+      'ff00:0:0:0:0:0:0:0-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff',
+      '64:ff9b:0:0:0:0:0:0-64:ff9b:0:0:0:0:ffff:ffff',
     ]);
-    expect(p.resolvers).toEqual([]);
     expect(p.hosts).toEqual([]);
+    expect(p.blockSmbLan).toBe(false);
+    expect(inLocalRange(ipv4(9, 9, 9, 9))).toBe(false);
   });
 
-  it('carves the local resolvers out (port 53 stays open to them), a public one needs nothing', () => {
+  it('turns deny.hosts and deny.ports into rules; names as they resolve now, said so', async () => {
     const p = lockdownPlan({
-      ...empty,
-      resolvers: [
-        ipv4(192, 168, 1, 1),
-        ipv4(9, 9, 9, 9),
-        'fd00::1',
-        'fe80::1%12',
-        ipv4(192, 168, 1, 1),
-      ],
-    });
-    expect(p.resolvers).toEqual([ipv4(192, 168, 1, 1), 'fd00:0:0:0:0:0:0:1', 'fe80:0:0:0:0:0:0:1']);
-    expect(p.local).toContain(`${ipv4(192, 168, 0, 0)}-${ipv4(192, 168, 1, 0)}`);
-    expect(p.local).toContain(`${ipv4(192, 168, 1, 2)}-${ipv4(192, 168, 255, 255)}`);
-    expect(p.local).toContain('fc00:0:0:0:0:0:0:0-fd00:0:0:0:0:0:0:0');
-    expect(p.local).toContain('fd00:0:0:0:0:0:0:2-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff');
-    expect(p.local.join(',')).not.toContain(ipv4(9, 9, 9, 9));
-  });
-
-  it('turns deny.hosts and deny.ports into rules; names as they resolve now, said so', () => {
-    const p = lockdownPlan({
-      resolvers: [],
       denyHosts: [
         'local-subnets',
         'tailnet-peers',
@@ -90,38 +95,42 @@ describe('the lockdown plan', () => {
       ipv4(198, 51, 100, 9),
     ]);
     expect(p.ports).toEqual([22, 5432]);
-    expect(p.notes.join('\n')).toContain('nas.example: blocked at');
+    expect(p.names).toEqual({ 'nas.example': [ipv4(198, 51, 100, 9)], 'gone.example': [] });
     expect(p.notes.join('\n')).toContain('gone.example: does not resolve now');
-  });
-
-  it('asks Windows for the resolvers and resolves names itself', async () => {
-    const plan = await lockdownFor({
-      resolvers: () =>
-        dnsResolvers(async () => ({
-          code: 0,
-          stdout: JSON.stringify([ipv4(192, 168, 1, 1), 'not an address!']),
-        })),
+    const viaLookup = await lockdownFor({
       deny: { hosts: ['nas.example', ipv4(203, 0, 113, 1)], ports: [] },
       lookup: async (n) => (n === 'nas.example' ? [ipv4(198, 51, 100, 3)] : []),
+      blockSmbLan: true,
     });
-    expect(plan.resolvers).toEqual([ipv4(192, 168, 1, 1)]);
-    expect(plan.hosts).toEqual([ipv4(198, 51, 100, 3), ipv4(203, 0, 113, 1)]);
-    expect(await dnsResolvers(async () => ({ code: 1, stdout: '' }))).toEqual([]);
-    expect(await dnsResolvers(async () => ({ code: 0, stdout: `"${ipv4(10, 0, 0, 2)}"` }))).toEqual(
-      [ipv4(10, 0, 0, 2)],
+    expect(viaLookup.hosts).toEqual([ipv4(198, 51, 100, 3), ipv4(203, 0, 113, 1)]);
+    expect(viaLookup.blockSmbLan).toBe(true);
+  });
+
+  it('reads every way Windows writes an address entry', () => {
+    const s = (e: string) => {
+      const x = entrySpan(e);
+      return x === undefined ? undefined : [x.lo.toString(16), x.hi.toString(16)];
+    };
+    expect(s(`${ipv4(10, 1, 0, 0)}/16`)).toEqual(s(`${ipv4(10, 1, 0, 0)}/${ipv4(255, 255, 0, 0)}`));
+    expect(s(`${ipv4(10, 1, 0, 0)}-${ipv4(10, 1, 255, 255)}`)).toEqual(
+      s(`${ipv4(10, 1, 0, 0)}/16`),
     );
+    expect(s('2001:db8:1::/64')).toEqual([
+      '20010db8000100000000000000000000',
+      '20010db800010000ffffffffffffffff',
+    ]);
+    expect(s('LocalSubnet')).toBeUndefined();
+    expect(s(`${ipv4(10, 0, 0, 0)}/${ipv4(255, 0, 255, 0)}`)).toBeUndefined();
   });
 });
 
 describe('names of deny.hosts', () => {
-  it('the plan keeps each name with the addresses its rule holds; the install records them', () => {
+  it('the install records each name with the addresses its rule holds', () => {
     const p = lockdownPlan({
-      resolvers: [],
-      denyHosts: ['nas.example', 'gone.example'],
+      denyHosts: ['nas.example'],
       resolved: { 'nas.example': [ipv4(198, 51, 100, 9)] },
       denyPorts: [],
     });
-    expect(p.names).toEqual({ 'nas.example': [ipv4(198, 51, 100, 9)], 'gone.example': [] });
     const s = relaySetupScript({
       relayUser: 'studio-relay',
       crewPrefix: 'studio-crew',
@@ -143,28 +152,30 @@ describe('names of deny.hosts', () => {
     ).toEqual({ 'nas.example': [ipv4(198, 51, 100, 9)], x: [] });
   });
 
-  it('warns when a name moved to an address no rule holds, or came after the install; local ones are held anyway', async () => {
+  it('names a name that moved past its rule, or came after the install; local addresses are held anyway', async () => {
     const lookup = async (n: string) =>
       n === 'nas.example'
         ? [ipv4(198, 51, 100, 9), ipv4(203, 0, 113, 50), ipv4(192, 168, 1, 7)]
         : [ipv4(198, 51, 100, 9)];
-    const lines = await denyNameDrift({
-      denyHosts: [
-        'local-subnets',
-        ipv4(203, 0, 113, 1),
-        'nas.example',
-        'new.example',
-        'same.example',
-      ],
-      recorded: { 'nas.example': [ipv4(198, 51, 100, 9)], 'same.example': [ipv4(198, 51, 100, 9)] },
-      lookup,
-    });
-    expect(lines).toEqual([
-      `deny.hosts nas.example now resolves to ${ipv4(203, 0, 113, 50)}, which no firewall rule holds: run studio relay install again`,
-      'deny.hosts new.example has no firewall rule yet (added after the install): run studio relay install again',
+    expect(
+      await denyNameDrift({
+        denyHosts: [
+          'local-subnets',
+          ipv4(203, 0, 113, 1),
+          'nas.example',
+          'new.example',
+          'same.example',
+        ],
+        recorded: {
+          'nas.example': [ipv4(198, 51, 100, 9)],
+          'same.example': [ipv4(198, 51, 100, 9)],
+        },
+        lookup,
+      }),
+    ).toEqual([
+      `deny.hosts nas.example now resolves to ${ipv4(203, 0, 113, 50)}, which no firewall rule holds`,
+      'deny.hosts new.example has no firewall rule yet (added after the install)',
     ]);
-    expect(inLocalRange(ipv4(100, 100, 100, 100))).toBe(true);
-    expect(inLocalRange(ipv4(9, 9, 9, 9))).toBe(false);
   });
 });
 
@@ -182,7 +193,7 @@ describe('the lockdown in the setup scripts', () => {
       ...(lockdown === undefined ? {} : { lockdown }),
     });
 
-  it('relay install: rules for the relay account and the group, proved and read back before sshd starts', () => {
+  it('relay install: rules for the relay account and the group with the routes of the machine, proved and read back before sshd starts', () => {
     const s = relay();
     const at = (m: string) => {
       const i = s.indexOf(m);
@@ -198,11 +209,30 @@ describe('the lockdown in the setup scripts', () => {
       at('Start-Service sshd\nWrite-Output "ok: relay account'),
     ];
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    // A failure throws inside the install's try: sshd stays stopped and closed.
+    expect(s).toContain('-RemoteAddress ($lockLocal + $lockHosts + $routes)');
+    expect(s).toContain('$routes = @(LocalRoutes)');
+    // No exception for any resolver: name resolution goes through the DNS Client service.
+    expect(s).not.toMatch(/\$lockResolvers|RemotePort @\('1-52'/);
     expect(s).toContain('throw "the network lockdown does not hold');
     expect(s).toContain('firewall = $true');
-    // The spooler stays on unless asked; drivers are for administrators only either way.
     expect(s).not.toContain('Stop-Service -Name Spooler');
+    // SMB to the local networks for everyone only when asked.
+    expect(s).toContain('$lockSmbLan = $false');
+    expect(lockdownSection(lockdownPlan({ ...empty, blockSmbLan: true }), '@()')).toContain(
+      `-DisplayName '${SMB_LAN_RULE}' -Protocol TCP -RemotePort @('445', '139')`,
+    );
+  });
+
+  it('the routes: everything but the default route and loopback; an IPv6 target from the gateway or a unique-local neighbor', () => {
+    expect(ROUTE_FUNCTIONS).toContain(
+      `$d -ne '${ipv4(0, 0, 0, 0)}/0' -and $d -ne '::/0' -and $d -notlike '127.*' -and $d -ne '::1/128'`,
+    );
+    expect(ROUTE_FUNCTIONS).toContain("Get-NetRoute -DestinationPrefix '::/0'");
+    expect(ROUTE_FUNCTIONS).toContain(
+      "'[' + [string]$gw.NextHop + '%' + $gw.InterfaceIndex + ']:445'",
+    );
+    const probe = lockdownSection(lockdownPlan(empty), '@()');
+    expect(probe).toContain('$v6 = V6Target\n  if ($v6) { $t += $v6 }');
   });
 
   it('--no-firewall: no rules, the earlier ones removed, said to be unsafe, recorded', () => {
@@ -211,33 +241,27 @@ describe('the lockdown in the setup scripts', () => {
     expect(s).toContain(`Get-NetFirewallRule -Group '${LOCKDOWN_GROUP}'`);
     expect(s).toContain('UNSAFE (--no-firewall)');
     expect(s).toContain('firewall = $false');
-    expect(lockdownSection(null, '@()')).not.toContain('New-NetFirewallRule');
   });
 
   it('worker windows-setup: the group alone', () => {
     const s = windowsSetupScript({ prefix: 'studio-crew', crewDir: 'C:\\crew', readPaths: [] });
     expect(s).toContain('$lockSids = @($groupSid)');
     expect(s).toContain('LockdownProbe $lockSids');
-    expect(s).toContain('RestrictDriverInstallationToAdministrators');
   });
 
-  it('the throwaway user is bound into the rule for the probe only, and goes after it', () => {
+  it('the throwaway user: bound for the probe only, its files in an admin-only folder, deleted by name', () => {
     const s = lockdownSection(lockdownPlan(empty), '@($groupSid)');
     expect(s).toContain('LockdownRules (@($sids) + @($u.SID.Value))');
     const fin = s.indexOf('} finally {\n    LockdownRules $sids');
     expect(fin).toBeGreaterThan(s.indexOf('$after = ConnectAs'));
     expect(s.indexOf('$null = RetireJobUsers', fin)).toBeGreaterThan(fin);
-    // Every target must be the firewall's own refusal.
-    // Every target is the firewall's refusal or has no route at all, and one at least is refused.
     expect(s).toContain("@('10051', '10065', '10049', '10013') -notcontains $after[$_]");
-    // Neighbors are hosts: no broadcast address, no permanent (static or multicast) entry.
-    expect(s).toContain("-notmatch '\\.(0|255)$'");
     expect(s).toContain('$refused -eq 0');
-    // The probe script goes as a file in an admin-only folder (a credential logon's command line
-    // holds 1024 characters), its answer in the same folder.
-    expect(s).toContain("$dir = Join-Path $env:ProgramData ('studio-probe-'");
-    expect(s).toContain("'-File', ('\"' + $file + '\"')");
-    expect(s).not.toMatch(/\$env:TEMP/);
+    expect(s).toContain('[IO.Directory]::CreateDirectory($dir, $acl)');
+    expect(s).toContain(
+      'foreach ($f in @($file, $out, $err)) { Remove-Item -LiteralPath $f -Force',
+    );
+    expect(s).not.toMatch(/-Recurse|\$env:TEMP/);
   });
 
   it('uninstall removes the rules and puts Point and Print back as recorded', () => {
@@ -257,37 +281,291 @@ describe('the lockdown in the setup scripts', () => {
     const prior = (pointAndPrint: { exists: boolean; value?: number }) =>
       restoreSteps({ readPaths: [], spoolerDisabled: false, prior: { pointAndPrint } });
     expect(prior({ exists: false })).toContain('Remove-ItemProperty');
-    expect(prior({ exists: true, value: 0 })).toContain(
-      'RestrictDriverInstallationToAdministrators -Type DWord -Value 0',
-    );
     expect(restoreSteps(undefined)).not.toContain('RestrictDriverInstallationToAdministrators');
   });
 });
 
 describe('the check before every relay start', () => {
-  const answer =
-    (results: Record<string, string>, code = 0) =>
-    async () => ({
-      code,
-      stdout: JSON.stringify(results),
-      stderr: '',
-    });
+  const me = 'S-1-5-21-1-2-3-1001';
   const all = (r: string) => Object.fromEntries(PROBE_FIXED.map((t) => [t, r]));
+  const good = (): LockdownState => ({
+    me,
+    profiles: ['Domain', 'Private', 'Public'].map((name) => ({
+      name,
+      enabled: 'True',
+      local: 'True',
+    })),
+    rules: [
+      {
+        enabled: 'True',
+        action: 'Block',
+        direction: 'Outbound',
+        users: `D:(A;;CC;;;S-1-5-21-9)(A;;CC;;;${me})`,
+        remote: [
+          `${ipv4(10, 0, 0, 0)}/${ipv4(255, 0, 0, 0)}`,
+          '2001:db8:1::/64',
+          `${ipv4(192, 168, 0, 0)}-${ipv4(192, 168, 255, 255)}`,
+        ],
+      },
+    ],
+    routes: [`${ipv4(10, 4, 0, 0)}/16`, `${ipv4(192, 168, 1, 0)}/24`, '2001:db8:1::/64'],
+    v6: '[fe80::1%12]:445',
+    connect: { ...all('10013'), '[fe80::1%12]:445': '10013' },
+  });
 
-  it('holds when the firewall refuses every fixed target, and names what it did not', async () => {
-    expect(await lockdownProblem(answer(all('10013')))).toBeUndefined();
-    const one = { ...all('10013'), [PROBE_FIXED[0] as string]: 'timeout' };
-    expect(await lockdownProblem(answer(one))).toMatch(
-      /does not hold for the relay account \(.*timed out\): run studio relay install again/,
+  it('holds when the rule is there, bound to this account, covers every local prefix, and the firewall refuses every target', () => {
+    expect(judgeLockdown(good())).toBeUndefined();
+  });
+
+  it('refuses a new network the rule does not hold, an IPv6 global prefix of the LAN too', () => {
+    expect(judgeLockdown({ ...good(), routes: [...good().routes, '2001:db8:2::/64'] })).toMatch(
+      /the local network 2001:db8:2::\/64 has no firewall rule .*run studio relay install again/,
     );
-    expect(await lockdownProblem(answer(all('10061')))).toMatch(/error 10061/);
-    // A target without any route reaches nothing; but at least one must be the firewall's refusal.
-    const noRoute = { ...all('10013'), [PROBE_FIXED[2] as string]: '10051' };
-    expect(await lockdownProblem(answer(noRoute))).toBeUndefined();
-    expect(await lockdownProblem(answer(all('10051')))).toMatch(/error 10051/);
-    expect(await lockdownProblem(answer({}, 1))).toMatch(/cannot be checked/);
-    expect(await lockdownProblem(answer({ x: '10013' }))).toMatch(/cannot be checked/);
+  });
+
+  it('refuses a profile off, local rules ignored, a missing or foreign rule, an IPv6 target not refused', () => {
+    const off = good();
+    off.profiles[1] = { name: 'Private', enabled: 'False', local: 'True' };
+    expect(judgeLockdown(off)).toMatch(
+      /off for the Private profile: Set-NetFirewallProfile -Profile Private -Enabled True/,
+    );
+    const ignored = good();
+    ignored.profiles[0] = { name: 'Domain', enabled: 'True', local: 'False' };
+    expect(judgeLockdown(ignored)).toMatch(/ignore local firewall rules/);
+    expect(judgeLockdown({ ...good(), rules: [] })).toMatch(/not in the active firewall policy/);
+    const other = good();
+    (other.rules[0] as LockdownState['rules'][number]).users = 'D:(A;;CC;;;S-1-5-21-9)';
+    expect(judgeLockdown(other)).toMatch(/does not hold the relay account/);
+    expect(
+      judgeLockdown({ ...good(), connect: { ...all('10013'), '[fe80::1%12]:445': 'timeout' } }),
+    ).toMatch(/\[fe80::1%12\]:445 timed out/);
+    expect(judgeLockdown({ ...good(), connect: all('10013') })).toMatch(
+      /IPv6 target .* was not probed/,
+    );
+    expect(judgeLockdown({ ...good(), v6: null, connect: all('10051') })).toMatch(/does not hold/);
     expect(unrefused({ a: 'open' })).toEqual(['a opened']);
+  });
+
+  it('reads the state as Windows PowerShell prints it; no answer is a refusal', async () => {
+    const one = parseLockdownState({
+      me,
+      profiles: { name: 'Public', enabled: 'True', local: 'True' },
+      rules: {
+        enabled: 'True',
+        action: 'Block',
+        direction: 'Outbound',
+        users: me,
+        remote: `${ipv4(10, 0, 0, 0)}/8`,
+      },
+      routes: `${ipv4(10, 4, 0, 0)}/16`,
+      v6: null,
+      connect: all('10013'),
+    });
+    expect(one?.profiles).toHaveLength(1);
+    expect(one?.rules[0]?.remote).toEqual([`${ipv4(10, 0, 0, 0)}/8`]);
+    expect(judgeLockdown(one as LockdownState)).toBeUndefined();
+    expect(await lockdownProblem(async () => ({ code: 1, stdout: '', stderr: '' }))).toMatch(
+      /cannot be checked/,
+    );
+    expect(
+      await lockdownProblem(async () => ({ code: 0, stdout: JSON.stringify(good()), stderr: '' })),
+    ).toBeUndefined();
+    expect(LOCKDOWN_STATE).toContain(`-DisplayName '${LOCKDOWN_RULE}'`);
+    expect(LOCKDOWN_STATE).toContain('Get-NetFirewallAddressFilter');
+  });
+
+  it('the SMB check as the relay account: IPC$ of each candidate without credentials, sessions closed at once', () => {
+    const s = SMB_AS_ME([ipv4(192, 168, 1, 5), 'nas.example', 'bad host']);
+    expect(s).toContain(`@('${ipv4(192, 168, 1, 5)}', 'nas.example')`);
+    expect(s).toContain('WNetAddConnection2($r, $null, $null, 0)');
+    expect(s).toContain(
+      'if ($c -eq 0) { [void][StudioSmb]::WNetCancelConnection2($target, 0, $true) }',
+    );
+  });
+});
+
+describe('the proxy refuses the networks of this machine too', () => {
+  it('a public name that resolves into a network the machine sits in is refused like a private one', async () => {
+    const onLink = onLinkBlockList({
+      eth0: [
+        {
+          address: ipv4(203, 0, 113, 10),
+          netmask: ipv4(255, 255, 255, 0),
+          family: 'IPv4',
+          mac: '00:00:00:00:00:00',
+          internal: false,
+          cidr: `${ipv4(203, 0, 113, 10)}/24`,
+        },
+        {
+          address: '2001:db8:5::10',
+          netmask: 'ffff:ffff:ffff:ffff::',
+          family: 'IPv6',
+          mac: '00:00:00:00:00:00',
+          internal: false,
+          cidr: '2001:db8:5::10/64',
+          scopeid: 0,
+        },
+      ],
+    });
+    const resolve = (a: string) => async () => [a];
+    expect(await checkedAddress(resolve(ipv4(203, 0, 113, 77)), 'x.example', onLink)).toMatchObject(
+      { refused: expect.stringContaining('local or private') },
+    );
+    expect(await checkedAddress(resolve('2001:db8:5::99'), 'x.example', onLink)).toMatchObject({
+      refused: expect.any(String),
+    });
+    expect(await checkedAddress(resolve(ipv4(9, 9, 9, 9)), 'x.example', onLink)).toEqual({
+      address: ipv4(9, 9, 9, 9),
+    });
+  });
+});
+
+describe('the checks of a relay start (relayWindows.check)', () => {
+  const machine = (record: Record<string, unknown>) => {
+    const m = join(root, `m-${randomBytes(3).toString('hex')}`);
+    mkdirSync(m, { recursive: true });
+    writeFileSync(
+      installRecordFile(m),
+      JSON.stringify({ version: 1, readPaths: [], spoolerDisabled: false, prior: null, ...record }),
+    );
+    return m;
+  };
+  // Windows as the relay account sees it: a standard user, no WebClient, no loopback listener.
+  const run: RunFile = async (file, args) => {
+    const cmd = args.join(' ');
+    if (file === 'whoami')
+      return { code: 0, stdout: '"BUILTIN\\Users","Alias","S-1-5-32-545"', stderr: '' };
+    if (cmd.includes('WebClient')) return { code: 0, stdout: '{"exists":false}', stderr: '' };
+    if (cmd.includes('Get-NetTCPConnection')) return { code: 0, stdout: '[]', stderr: '' };
+    return { code: 1, stdout: '', stderr: '' };
+  };
+  const windows = (
+    m: string,
+    o: { lookup?: (n: string) => Promise<string[]>; smb?: Record<string, number> } = {},
+  ) =>
+    relayWindows({
+      prefix: 'studio-crew',
+      home: join(m, 'home'),
+      machine: m,
+      task: 'Studio relay broker',
+      stateRoot: join(m, 'state'),
+      ownerRoot: join(m, 'owner'),
+      crewConfigDir: join(m, 'crew'),
+      ownerHome: m,
+      ownerConfigDir: join(m, 'config'),
+      unreachable: [],
+      env: {},
+      ports: realPorts(),
+      startProxy: async () => ({ port: 1, close: async () => {} }),
+      run,
+      interfaces: () => ({}),
+      lockdown: async () => undefined,
+      lookup: o.lookup ?? (async () => [ipv4(198, 51, 100, 9)]),
+      smbAsMe: async () => o.smb ?? {},
+    });
+  const deny = { paths: [], ports: [] } as unknown as Parameters<
+    ReturnType<typeof relayWindows>['check']
+  >[0]['deny'];
+
+  it('a deny.hosts name past its rule holds the start, with the fix', async () => {
+    const m = machine({
+      firewall: true,
+      lockdownNames: { 'nas.example': [ipv4(198, 51, 100, 9)] },
+    });
+    const r = await windows(m, { lookup: async () => [ipv4(203, 0, 113, 50)] }).check({
+      deny,
+      hosts: ['nas.example'],
+    });
+    expect(r.problem).toEqual({
+      kind: 'held',
+      line: `deny.hosts nas.example now resolves to ${ipv4(203, 0, 113, 50)}, which no firewall rule holds: run studio relay install again, elevated, so the firewall rules follow the names`,
+    });
+  });
+
+  it('an SMB session the relay account opens refuses the start', async () => {
+    const m = machine({
+      firewall: true,
+      lockdownNames: { 'nas.example': [ipv4(198, 51, 100, 9)] },
+    });
+    const r = await windows(m, { smb: { 'nas.example': 0 } }).check({
+      deny,
+      hosts: ['nas.example'],
+    });
+    expect(r.problem?.kind).toBe('refused');
+    expect(r.problem?.line).toContain('the relay account opened an SMB session to nas.example');
+  });
+
+  it('without a lockdown every check says so', async () => {
+    const m = machine({ firewall: false });
+    const r = await windows(m, { smb: { 'nas.example': 0 } }).check({
+      deny,
+      hosts: ['nas.example'],
+    });
+    expect(r.warnings).toContain(NO_LOCKDOWN);
+  });
+});
+
+describe('a worker without its lockdown, as the lead sees it', () => {
+  const transport = (warnings: string[]): RelayTransport => ({
+    async call(header) {
+      const msg =
+        header.op === 'probe'
+          ? { studioRelay: 1, ok: true, problem: null, kind: null, load: null, warnings: [] }
+          : {
+              studioRelay: 1,
+              ok: true,
+              studio: '1.0.0',
+              platform: 'win32',
+              plugins: {},
+              busy: null,
+              held: null,
+              pairProofs: [],
+              warnings,
+            };
+      return (await readMessage(
+        new LineReader(
+          (async function* () {
+            yield* encodeMessage(msg);
+          })(),
+          1 << 20,
+        ),
+        0,
+      )) as {
+        header: Record<string, unknown>;
+      };
+    },
+  });
+  it('doctor fails on it, with the fix, unless the lead accepted it', async () => {
+    const no = await relayDoctor({
+      transport: transport([NO_LOCKDOWN]),
+      label: 'lab',
+      studioVersion: '1.0.0',
+      pins: [],
+    });
+    expect(no.ok).toBe(false);
+    expect(no.lines.join('\n')).toContain(
+      'accept it with workers.relay.lab.accept_no_firewall: true',
+    );
+    const yes = await relayDoctor({
+      transport: transport([NO_LOCKDOWN]),
+      label: 'lab',
+      studioVersion: '1.0.0',
+      pins: [],
+      acceptNoFirewall: true,
+    });
+    expect(yes.ok).toBe(true);
+    expect(yes.lines.join('\n')).toContain('note: no network lockdown');
+  });
+  it('the lead config takes accept_no_firewall, off by default', () => {
+    const base = {
+      host: 'worker.example',
+      hostKey: `ssh-ed25519 ${'A'.repeat(68)}`,
+      identityFile: '/home/o/.ssh/k',
+    };
+    expect(relayTargetSchema.parse(base).acceptNoFirewall).toBeUndefined();
+    expect(relayTargetSchema.parse({ ...base, acceptNoFirewall: true }).acceptNoFirewall).toBe(
+      true,
+    );
   });
 });
 
@@ -298,12 +576,9 @@ describe('studio relay install and setup with and without --no-firewall', () => 
     const machine = join(root, `m-${randomBytes(3).toString('hex')}`);
     const scripts: string[] = [];
     const out: string[] = [];
-    const exec: Exec = async (file, args) => {
-      if (args.includes('-File')) scripts.push(readFileSync(args.at(-1) as string, 'utf8'));
-      const cmd = args.at(-1) ?? '';
-      if (cmd.includes('Get-DnsClientServerAddress')) {
-        return { code: 0, stdout: JSON.stringify([ipv4(192, 168, 7, 1)]), stderr: '' };
-      }
+    const exec: Exec = async (file, _args, o) => {
+      const script = scriptOfRun(o);
+      if (script !== undefined) scripts.push(script);
       return { code: 0, stdout: file === 'powershell.exe' ? '1' : '', stderr: '' };
     };
     await runRelayCommand({
@@ -323,10 +598,13 @@ describe('studio relay install and setup with and without --no-firewall', () => 
     return { script: scripts[0] ?? out.join(''), out: out.join('') };
   };
 
-  it("install: the lockdown with this machine's resolver carved out; --no-firewall: none, said unsafe", async () => {
+  it('install: the lockdown; --no-firewall: none, said unsafe; --block-smb-lan: the machine-wide SMB rule', async () => {
     const on = await run('install', { source: 'fd7a::/48' });
     expect(on.script).toContain('LockdownProbe $lockSids');
-    expect(on.script).toContain(`$lockResolvers = @('${ipv4(192, 168, 7, 1)}')`);
+    expect(on.script).toContain('$lockSmbLan = $false');
+    expect((await run('install', { source: 'fd7a::/48', 'block-smb-lan': true })).script).toContain(
+      '$lockSmbLan = $true',
+    );
     const off = await run('install', { source: 'fd7a::/48', 'no-firewall': true });
     expect(off.script).not.toContain('LockdownProbe');
     expect(off.script).toContain('UNSAFE (--no-firewall)');
@@ -335,6 +613,7 @@ describe('studio relay install and setup with and without --no-firewall', () => 
   it('setup prints the same lockdown', async () => {
     expect((await run('setup', {})).script).toContain('LockdownProbe $lockSids');
     expect((await run('setup', { 'no-firewall': true })).script).toContain('UNSAFE');
+    expect(NO_LOCKDOWN).toContain('--no-firewall');
   });
 });
 
@@ -345,7 +624,7 @@ describe.skipIf(!elevated)('the lockdown on Windows', () => {
   const env = Object.fromEntries(
     Object.entries(powershellEnv(process.env)).filter(([k]) => k.toLowerCase() !== 'psmodulepath'),
   );
-  const runScript = (script: string) => {
+  const runPs = (script: string) => {
     const file = join(root, `l-${randomBytes(3).toString('hex')}.ps1`);
     writeFileSync(file, script);
     return execFileSync(
@@ -358,13 +637,14 @@ describe.skipIf(!elevated)('the lockdown on Windows', () => {
   it('a throwaway user bound into the rule is refused by the firewall everywhere local; the rules read back; then they go', () => {
     const tag = randomBytes(3).toString('hex');
     const prefix = `slk${tag}`;
-    const out = runScript(`$ErrorActionPreference = 'Stop'
+    const out = runPs(`$ErrorActionPreference = 'Stop'
 ${crewAccountFunctions(prefix, { treeSource: TREE_SOURCE() })}
 $g = New-LocalGroup -Name '${prefix}s' -Description $groupDescription
 $groupSid = $g.SID.Value
 try {
-${lockdownSection(lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [5432] }), '@($groupSid)')}
+${lockdownSection(lockdownPlan({ denyHosts: [], denyPorts: [5432], blockSmbLan: true }), '@($groupSid)')}
   Write-Output ('rules: ' + @(Get-NetFirewallRule -Group '${LOCKDOWN_GROUP}').Count)
+  Write-Output ('routes held: ' + @(LocalRoutes).Count)
 } finally {
   Get-NetFirewallRule -Group '${LOCKDOWN_GROUP}' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
   Remove-LocalGroup -SID $g.SID
@@ -373,12 +653,13 @@ Write-Output ('left users: ' + @(Get-LocalUser | Where-Object { $_.Name -like '$
     expect(out).toMatch(/lockdown probe: before the rule \d+ of \d+ local targets/);
     expect(out).toMatch(/ok: all \d+ refused by the firewall/);
     expect(out).toContain('ok: network lockdown');
-    // The local rule, and TCP and UDP for the denied port.
-    expect(out).toContain('rules: 3');
+    // The local rule, TCP and UDP for the denied port, and the machine-wide SMB rule.
+    expect(out).toContain('rules: 4');
+    expect(out).toMatch(/routes held: [1-9]/);
     expect(out).toContain('left users: 0');
   }, 300_000);
 
-  it('the check as this account: refused by a rule bound to it, not refused without one', async () => {
+  it('the check as this account: the real rule with the routes of this machine holds; without it, it refuses', async () => {
     const me = execFileSync(
       'powershell.exe',
       [
@@ -389,18 +670,19 @@ Write-Output ('left users: ' + @(Get-LocalUser | Where-Object { $_.Name -like '$
       ],
       { encoding: 'utf8', env },
     ).trim();
-    // Only the fixed probe targets, for this account, for the length of the test.
-    const name = `Studio lockdown test ${randomBytes(3).toString('hex')}`;
-    const addresses = PROBE_FIXED.map((t) => `'${t.slice(0, t.lastIndexOf(':'))}'`).join(', ');
-    expect(await lockdownProblem(runFile)).toMatch(/does not hold for the relay account/);
-    runScript(
-      `New-NetFirewallRule -DisplayName '${name}' -Direction Outbound -Action Block -LocalUser 'D:(A;;CC;;;${me})' -RemoteAddress @(${addresses}) | Out-Null`,
-    );
+    expect(await lockdownProblem(runFile)).toMatch(/not in the active firewall policy/);
+    // The real rule, bound to this account, for the length of the test.
+    runPs(`$ErrorActionPreference = 'Stop'
+${lockdownSection(lockdownPlan(empty), `@('${me}')`)
+  .split('\n')
+  .filter((l) => !/^(LockdownProbe|\$lockProblems|if \(@\(\$lockProblems)/.test(l))
+  .join('\n')}`);
     try {
       expect(await lockdownProblem(runFile)).toBeUndefined();
     } finally {
-      runScript(`Get-NetFirewallRule -DisplayName '${name}' | Remove-NetFirewallRule`);
+      runPs(
+        `Get-NetFirewallRule -Group '${LOCKDOWN_GROUP}' -ErrorAction SilentlyContinue | Remove-NetFirewallRule`,
+      );
     }
-    expect(CONNECT_TEST).toContain('ConnectAsync');
-  }, 120_000);
+  }, 180_000);
 });

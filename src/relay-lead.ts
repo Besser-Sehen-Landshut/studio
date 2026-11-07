@@ -17,6 +17,7 @@ import {
   writeStateFile,
 } from './paths.js';
 import type { Ports } from './ports.js';
+import { NO_LOCKDOWN } from './relay-lockdown.js';
 import {
   type CollectAnswer,
   MAX_RESULT_BUNDLE_BYTES,
@@ -510,6 +511,8 @@ export async function relayDoctor(o: {
   label: string;
   studioVersion: string;
   pins: readonly { name: string; version: string }[];
+  /** The lead accepted a worker without its network lockdown (`accept_no_firewall`). */
+  acceptNoFirewall?: boolean;
 }): Promise<{ ok: boolean; lines: string[] }> {
   const lines: string[] = [];
   let ok = true;
@@ -535,8 +538,16 @@ export async function relayDoctor(o: {
       }
     }
     for (const w of hello.warnings) {
+      if (w === NO_LOCKDOWN && o.acceptNoFirewall === true) {
+        lines.push(`${o.label}: note: ${w} (accepted: accept_no_firewall)`);
+        continue;
+      }
       ok = false;
-      lines.push(`${o.label}: ${w}`);
+      lines.push(
+        w === NO_LOCKDOWN
+          ? `${o.label}: ${w}; fix: run studio relay install there without --no-firewall, or accept it with workers.relay.${o.label}.accept_no_firewall: true`
+          : `${o.label}: ${w}`,
+      );
     }
     const { answer: probe } = await relayCall(o.transport, 'probe', {}, { timeoutMs: 10 * 60_000 });
     if (!probe.ok) {

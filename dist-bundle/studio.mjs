@@ -31495,6 +31495,9 @@ var relayTargetSchema = external_exports.strictObject({
   hostKey: external_exports.string().regex(RELAY_HOST_KEY_RE, "an SSH public key: <type> <base64>"),
   // The lead's private key for this worker; absolute, never the agent.
   identityFile: external_exports.string().min(2).max(500).refine((p) => isAbsolute(p), "must be an absolute path"),
+  // A worker installed with --no-firewall: its missing network lockdown is accepted (doctor notes
+  // it, starts go on); without this, doctor fails and nothing starts there.
+  acceptNoFirewall: external_exports.boolean().optional(),
   // How long the worker may be unreachable before the item goes to the lead.
   graceMinutes: external_exports.number().int().min(5).max(24 * 60).default(30)
 });
@@ -40088,6 +40091,7 @@ import {
   isIP as isIP3,
   connect as tcpConnect
 } from "node:net";
+import { networkInterfaces } from "node:os";
 
 // src/worker-deny.ts
 import { existsSync as existsSync6, readFileSync as readFileSync26, realpathSync as realpathSync6 } from "node:fs";
@@ -40467,7 +40471,7 @@ function embeddedIpv4(h2) {
   return out;
 }
 var systemResolve = async (host) => (await lookup(host, { all: true, verbatim: true })).map((a2) => a2.address);
-async function checkedAddress(resolve16, host) {
+async function checkedAddress(resolve16, host, extra) {
   let answers;
   try {
     answers = await resolve16(host);
@@ -40475,7 +40479,9 @@ async function checkedAddress(resolve16, host) {
     return { refused: "does not resolve" };
   }
   if (answers.length === 0) return { refused: "does not resolve" };
-  const bad = answers.find(blockedAddress);
+  const bad = answers.find(
+    (a2) => blockedAddress(a2) || extra !== void 0 && extra.check(a2, isIP3(a2) === 6 ? "ipv6" : "ipv4")
+  );
   if (bad !== void 0) return { refused: `resolves to a local or private address (${bad})` };
   return { address: answers[0] };
 }
@@ -40486,8 +40492,23 @@ Content-Length: 0\r
 \r
 `);
 }
+function onLinkBlockList(ifaces = networkInterfaces()) {
+  const b = new BlockList();
+  for (const list2 of Object.values(ifaces)) {
+    for (const a2 of list2 ?? []) {
+      if (a2.internal || a2.cidr === null) continue;
+      const [net, bits] = a2.cidr.split("/");
+      try {
+        b.addSubnet(net, Number(bits), a2.family === "IPv6" ? "ipv6" : "ipv4");
+      } catch {
+      }
+    }
+  }
+  return b;
+}
 async function startEgressProxy(o2) {
   const rules = allowRules(o2.allow);
+  const onLink = o2.onLink ?? onLinkBlockList();
   const refused = [];
   const resolve16 = o2.resolve ?? systemResolve;
   const dial = o2.dial ?? ((address2, port) => tcpConnect({ host: address2, port }));
@@ -40520,7 +40541,7 @@ async function startEgressProxy(o2) {
         refuse2(client, `${target.host}:${target.port} (${why})`);
         return;
       }
-      void checkedAddress(resolve16, target.host).then((checked) => {
+      void checkedAddress(resolve16, target.host, onLink).then((checked) => {
         if (client.destroyed) return;
         if ("refused" in checked) {
           refuse2(client, `${target.host}:${target.port} (${checked.refused})`);
@@ -40568,40 +40589,46 @@ async function startEgressProxy(o2) {
 
 // src/relay-lockdown.ts
 import { lookup as dnsLookup } from "node:dns/promises";
+var resolveAll = async (name) => {
+  try {
+    return (await dnsLookup(name, { all: true })).map((a2) => a2.address);
+  } catch {
+    return [];
+  }
+};
 async function lockdownFor(o2) {
-  const lookup2 = o2.lookup ?? (async (name) => {
-    try {
-      return (await dnsLookup(name, { all: true })).map((a2) => a2.address);
-    } catch {
-      return [];
-    }
-  });
+  const lookup2 = o2.lookup ?? resolveAll;
   const resolved = {};
   for (const h2 of o2.deny.hosts) {
-    if (h2 === "local-subnets" || h2 === "tailnet-peers" || h2.includes("/")) continue;
-    if (addressSpan(h2) !== void 0) continue;
-    resolved[h2] = await lookup2(h2);
+    if (isDenyName(h2)) resolved[h2] = await lookup2(h2);
   }
   return lockdownPlan({
-    resolvers: await o2.resolvers(),
     denyHosts: o2.deny.hosts,
     resolved,
-    denyPorts: o2.deny.ports
+    denyPorts: o2.deny.ports,
+    ...o2.blockSmbLan === true ? { blockSmbLan: true } : {}
   });
 }
 var LOCKDOWN_GROUP = "Studio relay lockdown";
 var LOCKDOWN_RULE = "Studio relay lockdown: no local network";
+var SMB_LAN_RULE = "Studio relay lockdown: no SMB to the local network (all users)";
 var LOCAL_V4 = [
   [10, 0, 0, 0, 8],
   [100, 64, 0, 0, 10],
   [169, 254, 0, 0, 16],
   [172, 16, 0, 0, 12],
-  [192, 168, 0, 0, 16]
+  [192, 168, 0, 0, 16],
+  [198, 18, 0, 0, 15],
+  [224, 0, 0, 0, 4],
+  [255, 255, 255, 255, 32]
 ];
 var LOCAL_V6 = [
   ["fc00::", 7],
-  ["fe80::", 10]
+  ["fe80::", 10],
+  ["ff00::", 8],
+  ["64:ff9b::", 96]
 ];
+var PRIVATE_V4 = LOCAL_V4.slice(0, 5);
 var v4Big = (s) => {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
   if (m === null) return void 0;
@@ -40636,37 +40663,40 @@ var localSpans = () => [
   ...LOCAL_V6.map(([a2, bits]) => span(true, v6Big(a2), bits))
 ];
 function addressSpan(a2) {
-  const bare = a2.replace(/%.*$/, "");
+  const bare = a2.replace(/%.*$/, "").replace(/^\[|\]$/g, "");
   const n4 = v4Big(bare);
   if (n4 !== void 0) return { v6: false, lo: n4, hi: n4 };
   const n6 = v6Big(bare);
   return n6 === void 0 ? void 0 : { v6: true, lo: n6, hi: n6 };
 }
-function carve(spans, holes) {
-  let out = [...spans];
-  for (const h2 of holes) {
-    out = out.flatMap((s) => {
-      if (s.v6 !== h2.v6 || h2.lo > s.hi || h2.hi < s.lo) return [s];
-      const parts = [];
-      if (h2.lo > s.lo) parts.push({ v6: s.v6, lo: s.lo, hi: h2.lo - 1n });
-      if (h2.hi < s.hi) parts.push({ v6: s.v6, lo: h2.hi + 1n, hi: s.hi });
-      return parts;
-    });
+var maskBits = (mask) => {
+  const n4 = v4Big(mask);
+  if (n4 === void 0) return void 0;
+  const bits = n4.toString(2).padStart(32, "0");
+  return /^1*0*$/.test(bits) ? bits.indexOf("0") === -1 ? 32 : bits.indexOf("0") : void 0;
+};
+function entrySpan(entry) {
+  const e = entry.trim();
+  const dash = /^([^-]+)-([^-]+)$/.exec(e);
+  if (dash !== null) {
+    const a2 = addressSpan(dash[1]);
+    const b = addressSpan(dash[2]);
+    return a2 !== void 0 && b !== void 0 && a2.v6 === b.v6 && a2.lo <= b.hi ? { v6: a2.v6, lo: a2.lo, hi: b.hi } : void 0;
   }
-  return out;
+  const slash = /^([^/]+)\/([^/]+)$/.exec(e);
+  if (slash !== null) {
+    const a2 = addressSpan(slash[1]);
+    if (a2 === void 0) return void 0;
+    const bits = /^\d{1,3}$/.test(slash[2]) ? Number(slash[2]) : a2.v6 ? void 0 : maskBits(slash[2]);
+    if (bits === void 0 || bits > (a2.v6 ? 128 : 32)) return void 0;
+    return span(a2.v6, a2.lo, bits);
+  }
+  return addressSpan(e);
 }
+var covered = (inner, outer) => outer.some((o2) => o2.v6 === inner.v6 && inner.lo >= o2.lo && inner.hi <= o2.hi);
+var isDenyName = (h2) => h2 !== "local-subnets" && h2 !== "tailnet-peers" && !h2.includes("/") && addressSpan(h2) === void 0;
 function lockdownPlan(o2) {
   const notes = [];
-  const locals = localSpans();
-  const inLocal = (s) => locals.some((l) => l.v6 === s.v6 && s.lo >= l.lo && s.hi <= l.hi);
-  const holes = [];
-  for (const r of o2.resolvers) {
-    const s = addressSpan(r);
-    if (s !== void 0 && inLocal(s) && !holes.some((h2) => h2.v6 === s.v6 && h2.lo === s.lo)) {
-      holes.push(s);
-    }
-  }
-  holes.sort((a2, b) => a2.v6 === b.v6 ? a2.lo < b.lo ? -1 : 1 : a2.v6 ? 1 : -1);
   const hosts = [];
   const names = {};
   const add = (s) => {
@@ -40697,47 +40727,36 @@ function lockdownPlan(o2) {
     notes.push(`deny.hosts ${h2}: blocked at ${got.join(", ")} as it resolves now`);
   }
   return {
-    local: carve(locals, holes).map(spanText),
-    resolvers: holes.map(spanText),
+    local: localSpans().map(spanText),
     hosts,
     ports: [...new Set(o2.denyPorts)].sort((a2, b) => a2 - b),
     notes,
-    names
+    names,
+    blockSmbLan: o2.blockSmbLan === true
   };
 }
 function inLocalRange(address) {
   const s = addressSpan(address);
-  return s !== void 0 && localSpans().some((l) => l.v6 === s.v6 && s.lo >= l.lo && s.hi <= l.hi);
+  return s !== void 0 && covered(s, localSpans());
 }
 async function denyNameDrift(o2) {
-  const lookup2 = o2.lookup ?? (async (name) => {
-    try {
-      return (await dnsLookup(name, { all: true })).map((a2) => a2.address);
-    } catch {
-      return [];
-    }
-  });
+  const lookup2 = o2.lookup ?? resolveAll;
   const out = [];
   for (const h2 of o2.denyHosts) {
-    if (h2 === "local-subnets" || h2 === "tailnet-peers" || h2.includes("/")) continue;
-    if (addressSpan(h2) !== void 0) continue;
+    if (!isDenyName(h2)) continue;
     const held2 = o2.recorded[h2];
     if (held2 === void 0) {
-      out.push(
-        `deny.hosts ${h2} has no firewall rule yet (added after the install): run studio relay install again`
-      );
+      out.push(`deny.hosts ${h2} has no firewall rule yet (added after the install)`);
       continue;
     }
     const now = (await lookup2(h2)).filter((a2) => !inLocalRange(a2) && !held2.includes(a2));
     if (now.length > 0) {
-      out.push(
-        `deny.hosts ${h2} now resolves to ${now.join(", ")}, which no firewall rule holds: run studio relay install again`
-      );
+      out.push(`deny.hosts ${h2} now resolves to ${now.join(", ")}, which no firewall rule holds`);
     }
   }
   return out;
 }
-var PROBE_FIXED = LOCAL_V4.map(
+var PROBE_FIXED = PRIVATE_V4.map(
   ([a2, b, c3, d]) => `${ipv43(a2, b, c3, d + 1)}:445`
 );
 var CONNECT_TEST = String.raw`$res = @{}
@@ -40749,8 +40768,8 @@ function Code($x) {
 }
 foreach ($t in $targets) {
   $at = $t.LastIndexOf(':')
-  $c = New-Object Net.Sockets.TcpClient
-  try { $open[$t] = @($c, $c.ConnectAsync($t.Substring(0, $at).Trim('[', ']'), [int]$t.Substring($at + 1))) }
+  $c = New-Object Net.Sockets.TcpClient($(if ($t.StartsWith('[')) { [Net.Sockets.AddressFamily]::InterNetworkV6 } else { [Net.Sockets.AddressFamily]::InterNetwork }))
+  try { $open[$t] = @($c, $c.ConnectAsync([Net.IPAddress]::Parse($t.Substring(0, $at).Trim('[', ']')), [int]$t.Substring($at + 1))) }
   catch { $res[$t] = Code $_.Exception; $c.Dispose() }
 }
 $deadline = [DateTime]::UtcNow.AddMilliseconds(3000)
@@ -40765,33 +40784,47 @@ foreach ($t in @($open.Keys)) {
 `;
 var NO_ROUTE = ["10051", "10065", "10049"];
 var FIREWALL_REFUSED = "10013";
+var said = (t, r) => `${t} ${r === "open" ? "opened" : r === "timeout" ? "timed out" : `error ${r}`}`;
 function unrefused(results) {
   const all = Object.entries(results);
   if (all.length > 0 && !all.some(([, r]) => r === FIREWALL_REFUSED)) {
-    return all.map(
-      ([t, r]) => `${t} ${r === "open" ? "opened" : r === "timeout" ? "timed out" : `error ${r}`}`
-    );
+    return all.map(([t, r]) => said(t, r));
   }
-  return all.filter(([, r]) => r !== FIREWALL_REFUSED && !NO_ROUTE.includes(r)).map(
-    ([t, r]) => `${t} ${r === "open" ? "opened" : r === "timeout" ? "timed out" : `error ${r}`}`
-  );
+  return all.filter(([, r]) => r !== FIREWALL_REFUSED && !NO_ROUTE.includes(r)).map(([t, r]) => said(t, r));
 }
+var ROUTE_FUNCTIONS = `function LocalRoutes {
+  @(Get-NetRoute -ErrorAction SilentlyContinue | Where-Object {
+    $d = [string]$_.DestinationPrefix
+    $d -ne '${ipv43(0, 0, 0, 0)}/0' -and $d -ne '::/0' -and $d -notlike '127.*' -and $d -ne '::1/128' -and $_.InterfaceAlias -notlike 'Loopback*'
+  } | ForEach-Object { [string]$_.DestinationPrefix } | Sort-Object -Unique)
+}
+function V6Target {
+  $gw = Get-NetRoute -DestinationPrefix '::/0' -ErrorAction SilentlyContinue | Where-Object { [string]$_.NextHop -ne '::' } | Select-Object -First 1
+  if ($null -ne $gw) { return '[' + [string]$gw.NextHop + '%' + $gw.InterfaceIndex + ']:445' }
+  $n = Get-NetNeighbor -AddressFamily IPv6 -ErrorAction SilentlyContinue | Where-Object { [string]$_.IPAddress -match '^f[cd]' -and @('Unreachable', 'Incomplete', 'Permanent') -notcontains [string]$_.State } | Select-Object -First 1
+  if ($null -ne $n) { return '[' + [string]$n.IPAddress + ']:445' }
+  $null
+}
+`;
 function lockdownFunctions(plan) {
   const list2 = (xs) => `@(${xs.map((x) => typeof x === "number" ? String(x) : psQuote(x)).join(", ")})`;
+  const accepted = [...NO_ROUTE, FIREWALL_REFUSED].map((c3) => `'${c3}'`).join(", ");
   return `$lockGroup = ${psQuote(LOCKDOWN_GROUP)}
 $lockLocal = ${list2(plan.local)}
-$lockResolvers = ${list2(plan.resolvers)}
 $lockHosts = ${list2(plan.hosts)}
 $lockPorts = ${list2(plan.ports)}
-function LockdownRules([string[]]$sids) {
+$lockSmbLan = ${plan.blockSmbLan ? "$true" : "$false"}
+${ROUTE_FUNCTIONS}function LockdownRules([string[]]$sids) {
   Get-NetFirewallRule -Group $lockGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule
   $who = 'D:' + (($sids | ForEach-Object { "(A;;CC;;;$_)" }) -join '')
-  $base = @{ Group = $lockGroup; Direction = 'Outbound'; Action = 'Block'; LocalUser = $who; Profile = 'Any' }
-  New-NetFirewallRule @base -DisplayName ${psQuote(LOCKDOWN_RULE)} -RemoteAddress ($lockLocal + $lockHosts) | Out-Null
+  $base = @{ Group = $lockGroup; Direction = 'Outbound'; Action = 'Block'; Profile = 'Any' }
+  $routes = @(LocalRoutes)
+  New-NetFirewallRule @base -LocalUser $who -DisplayName ${psQuote(LOCKDOWN_RULE)} -RemoteAddress ($lockLocal + $lockHosts + $routes) | Out-Null
   foreach ($p in @('TCP', 'UDP')) {
-    if ($lockResolvers.Count -gt 0) { New-NetFirewallRule @base -DisplayName "Studio relay lockdown: DNS resolvers, $p but port 53" -Protocol $p -RemotePort @('1-52', '54-65535') -RemoteAddress $lockResolvers | Out-Null }
-    if ($lockPorts.Count -gt 0) { New-NetFirewallRule @base -DisplayName "Studio relay lockdown: denied ports, $p" -Protocol $p -RemotePort ([string[]]$lockPorts) | Out-Null }
+    if ($lockPorts.Count -gt 0) { New-NetFirewallRule @base -LocalUser $who -DisplayName "Studio relay lockdown: denied ports, $p" -Protocol $p -RemotePort ([string[]]$lockPorts) | Out-Null }
   }
+  # --block-smb-lan: SMB to the local networks for every account, the owner's own shares included.
+  if ($lockSmbLan) { New-NetFirewallRule @base -DisplayName ${psQuote(SMB_LAN_RULE)} -Protocol TCP -RemotePort @('445', '139') -RemoteAddress ($lockLocal + $routes) | Out-Null }
 }
 # The rules as Windows applies them: present, on, blocking, bound to every SID; every firewall
 # profile on and taking local rules. Returns the problems.
@@ -40838,17 +40871,23 @@ function ConnectAs([string]$name, [string]$sid, [string]$plain, [string[]]$targe
     $h = @{}
     foreach ($q in (ConvertFrom-Json $raw).PSObject.Properties) { $h[$q.Name] = [string]$q.Value }
     $h
-  } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+  } finally {
+    # Only the files it made, by name, then the empty folder: nothing is followed or recursed.
+    foreach ($f in @($file, $out, $err)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+  }
 }
-# Local targets for the probe: the fixed ones, the default gateways, the resolvers (port 80: 53
-# stays open) and a few neighbors, IPv4 only.
+# Local targets for the probe: the fixed ones, the default gateways, the resolvers and a few
+# neighbors (IPv4), and one IPv6 target when the machine has IPv6 on its network.
 function ProbeTargets {
   $t = @(${PROBE_FIXED.map(psQuote).join(", ")})
   $local = '^(10\\.|100\\.(6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.|169\\.254\\.|172\\.(1[6-9]|2\\d|3[01])\\.|192\\.168\\.)'
   $gw = @(Get-NetRoute -DestinationPrefix '${ipv43(0, 0, 0, 0)}/0' -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.NextHop } | Where-Object { $_ -match $local })
   $dns = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses } | Where-Object { $_ -match $local })
   $nb = @(Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { [string]$_.IPAddress -match $local -and [string]$_.IPAddress -notmatch '\\.(0|255)$' -and @('Unreachable', 'Incomplete', 'Permanent') -notcontains [string]$_.State } | Select-Object -First 3 | ForEach-Object { [string]$_.IPAddress })
-  $t += @($gw | ForEach-Object { "$($_):445" }) + @($dns | ForEach-Object { "$($_):80" }) + @($nb | ForEach-Object { "$($_):445" })
+  $t += @($gw | ForEach-Object { "$($_):445" }) + @($dns | ForEach-Object { "$($_):53" }) + @($nb | ForEach-Object { "$($_):445" })
+  $v6 = V6Target
+  if ($v6) { $t += $v6 }
   @($t | Select-Object -Unique | Select-Object -First 12)
 }
 # A throwaway user, made like a crew user but in no group of Studio's, bound into the rules for one
@@ -40872,54 +40911,115 @@ function LockdownProbe([string[]]$sids) {
     if (Get-LocalUser -SID $u.SID -ErrorAction SilentlyContinue) { Remove-LocalUser -SID $u.SID }
   }
   $open = @($before.Keys | Where-Object { $before[$_] -ne '${FIREWALL_REFUSED}' }).Count
-  # No route at all (10051, 10065) reaches nothing either; the firewall must refuse the rest, and
-  # at least one target.
   Write-Output "lockdown probe: before the rule $open of $($targets.Count) local targets were not refused by the firewall; after it:"
-  $bad = @($after.Keys | Where-Object { @(${NO_ROUTE.concat([FIREWALL_REFUSED]).map((c3) => `'${c3}'`).join(", ")}) -notcontains $after[$_] } | ForEach-Object { "$_ $($after[$_])" })
+  # No route at all (10051, 10065, 10049) reaches nothing either; the firewall must refuse the rest,
+  # and at least one target.
+  $bad = @($after.Keys | Where-Object { @(${accepted}) -notcontains $after[$_] } | ForEach-Object { "$_ $($after[$_])" })
   $refused = @($after.Keys | Where-Object { $after[$_] -eq '${FIREWALL_REFUSED}' }).Count
   if ($after.Count -ne $targets.Count -or $bad.Count -gt 0 -or $refused -eq 0) { throw "the network lockdown does not hold: the firewall did not refuse $($bad -join ', '); nothing was opened to the lead. Check that no other firewall product replaces Windows Firewall, then run this again" }
   Write-Output "ok: all $($targets.Count) refused by the firewall"
 }
 `;
 }
-async function dnsResolvers(run2) {
-  const r = await run2("powershell.exe", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    "ConvertTo-Json -Compress -InputObject @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses } | Select-Object -Unique)"
-  ]);
-  if (r.code !== 0) return [];
-  try {
-    const raw = JSON.parse(r.stdout.trim() || "[]");
-    const list2 = Array.isArray(raw) ? raw : [raw];
-    return list2.filter(
-      (x) => typeof x === "string" && /^[0-9A-Fa-f:.%]{2,64}$/.test(x)
-    );
-  } catch {
-    return [];
+var LOCKDOWN_STATE = `$ErrorActionPreference = 'Stop'
+${ROUTE_FUNCTIONS}$state = @{ me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; profiles = @(); rules = @(); routes = @(LocalRoutes) }
+foreach ($p in @(Get-NetFirewallProfile -PolicyStore ActiveStore)) { $state.profiles += @{ name = [string]$p.Name; enabled = [string]$p.Enabled; local = [string]$p.AllowLocalFirewallRules } }
+foreach ($r in @(Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName ${psQuote(LOCKDOWN_RULE)} -ErrorAction SilentlyContinue)) {
+  $state.rules += @{ enabled = [string]$r.Enabled; action = [string]$r.Action; direction = [string]$r.Direction; users = [string]($r | Get-NetFirewallSecurityFilter).LocalUser; remote = @(($r | Get-NetFirewallAddressFilter).RemoteAddress | ForEach-Object { [string]$_ }) }
+}
+$targets = @(${PROBE_FIXED.map(psQuote).join(", ")})
+$v6 = V6Target
+if ($v6) { $targets += $v6 }
+$state.v6 = $v6
+$json = & { ${CONNECT_TEST.replace("[Console]::Out.Write((ConvertTo-Json -Compress $res))", "ConvertTo-Json -Compress $res")} }
+$state.connect = ConvertFrom-Json $json
+[Console]::Out.Write((ConvertTo-Json -Compress -Depth 5 $state))
+`;
+var asList = (x) => Array.isArray(x) ? x : x === void 0 || x === null ? [] : [x];
+function parseLockdownState(raw) {
+  const r = raw;
+  if (r === null || typeof r !== "object" || typeof r.me !== "string") return void 0;
+  const str = (x) => typeof x === "string" ? x : "";
+  const connect = {};
+  if (r.connect !== null && typeof r.connect === "object") {
+    for (const [k, v] of Object.entries(r.connect)) connect[k] = str(v);
   }
+  return {
+    me: r.me,
+    profiles: asList(r.profiles).map((p) => {
+      const q = p;
+      return { name: str(q.name), enabled: str(q.enabled), local: str(q.local) };
+    }),
+    rules: asList(r.rules).map((p) => {
+      const q = p;
+      return {
+        enabled: str(q.enabled),
+        action: str(q.action),
+        direction: str(q.direction),
+        users: str(q.users),
+        remote: asList(q.remote).map(str)
+      };
+    }),
+    routes: asList(r.routes).map(str).filter((x) => x !== ""),
+    v6: typeof r.v6 === "string" && r.v6 !== "" ? r.v6 : null,
+    connect
+  };
+}
+function judgeLockdown(s) {
+  const fix = "run studio relay install again, elevated";
+  for (const p of s.profiles) {
+    if (p.enabled !== "True") {
+      return `Windows Firewall is off for the ${p.name} profile: Set-NetFirewallProfile -Profile ${p.name} -Enabled True, elevated`;
+    }
+    if (p.local === "False")
+      return `a policy makes the ${p.name} profile ignore local firewall rules`;
+  }
+  if (s.profiles.length === 0) return `the firewall profiles cannot be read; ${fix}`;
+  if (s.rules.length !== 1) return `the lockdown rule is not in the active firewall policy; ${fix}`;
+  const rule = s.rules[0];
+  if (rule.enabled !== "True" || rule.action !== "Block" || rule.direction !== "Outbound") {
+    return `the lockdown rule is not an enabled outbound block; ${fix}`;
+  }
+  if (!rule.users.includes(s.me))
+    return `the lockdown rule does not hold the relay account; ${fix}`;
+  const held2 = rule.remote.flatMap((e) => {
+    const x = entrySpan(e);
+    return x === void 0 ? [] : [x];
+  });
+  for (const route of s.routes) {
+    const r = entrySpan(route);
+    if (r === void 0) return `the route ${route} cannot be read; ${fix}`;
+    if (!covered(r, held2)) {
+      return `the local network ${route} has no firewall rule (a network the install did not see); ${fix}`;
+    }
+  }
+  if (s.v6 !== null && !(s.v6 in s.connect))
+    return `the IPv6 target ${s.v6} was not probed; ${fix}`;
+  const bad = unrefused(s.connect);
+  if (Object.keys(s.connect).length < PROBE_FIXED.length || bad.length > 0) {
+    return `the network lockdown does not hold for the relay account (${bad.join(", ") || "no answer"}); ${fix}`;
+  }
+  return void 0;
 }
 async function lockdownProblem(run2) {
-  const targets = PROBE_FIXED.map(psQuote).join(", ");
   const r = await run2(
     "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", `$targets = @(${targets})
-${CONNECT_TEST}`],
-    { env: powershellEnv(process.env), timeoutMs: 6e4 }
+    ["-NoProfile", "-NonInteractive", "-Command", LOCKDOWN_STATE],
+    {
+      env: powershellEnv(process.env),
+      timeoutMs: 6e4
+    }
   );
-  let results;
+  let state;
   try {
-    const raw = r.code === 0 ? JSON.parse(r.stdout.trim()) : void 0;
-    results = raw !== null && typeof raw === "object" ? raw : void 0;
+    state = r.code === 0 ? parseLockdownState(JSON.parse(r.stdout.trim())) : void 0;
   } catch {
-    results = void 0;
+    state = void 0;
   }
-  if (results === void 0 || Object.keys(results).length !== PROBE_FIXED.length) {
+  if (state === void 0) {
     return "the network lockdown cannot be checked as the relay account; run studio relay install again, elevated";
   }
-  const bad = unrefused(results);
-  return bad.length === 0 ? void 0 : `the network lockdown does not hold for the relay account (${bad.join(", ")}): run studio relay install again, elevated`;
+  return judgeLockdown(state);
 }
 var POINT_AND_PRINT_KEY = "HKLM:\\Software\\Policies\\Microsoft\\Windows NT\\Printers\\PointAndPrint";
 var POINT_AND_PRINT = `# Printer drivers: administrators only install them (Point and Print); the spooler stays on.
@@ -40927,6 +41027,7 @@ if (-not (Test-Path -LiteralPath '${POINT_AND_PRINT_KEY}')) { New-Item -Path '${
 Set-ItemProperty -LiteralPath '${POINT_AND_PRINT_KEY}' -Name RestrictDriverInstallationToAdministrators -Type DWord -Value 1
 Write-Output 'ok: printer drivers only by administrators (RestrictDriverInstallationToAdministrators=1)'
 `;
+var NO_LOCKDOWN = "no network lockdown (studio relay install --no-firewall): the relay account can reach the local network";
 function lockdownSection(plan, sids) {
   if (plan === null) {
     return `# --no-firewall: no lockdown, and none of an earlier run stays.
@@ -40942,8 +41043,49 @@ LockdownRules $lockSids
 LockdownProbe $lockSids
 $lockProblems = LockdownCheck $lockSids
 if (@($lockProblems).Count -gt 0) { throw "the network lockdown does not hold: $(@($lockProblems) -join '; ')" }
-Write-Output 'ok: network lockdown (local ranges blocked, DNS resolvers on port 53 only, the internet open)'
+Write-Output 'ok: network lockdown (the local networks blocked, the internet open)'
 `;
+}
+var SMB_AS_ME = (hosts) => `Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class StudioSmb {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public class Res { public int Scope; public int Type; public int DisplayType; public int Usage; public string LocalName; public string RemoteName; public string Comment; public string Provider; }
+  [DllImport("mpr.dll", CharSet = CharSet.Unicode)] public static extern int WNetAddConnection2(Res r, string password, string user, int flags);
+  [DllImport("mpr.dll", CharSet = CharSet.Unicode)] public static extern int WNetCancelConnection2(string name, int flags, bool force);
+}
+'@
+$codes = @{}
+foreach ($h in @(${hosts.filter((h2) => /^[A-Za-z0-9.:-]{1,253}$/.test(h2)).map(psQuote).join(", ")})) {
+  $target = '\\\\' + $h + '\\IPC$'
+  $r = New-Object StudioSmb+Res
+  $r.RemoteName = $target
+  $c = [StudioSmb]::WNetAddConnection2($r, $null, $null, 0)
+  if ($c -eq 0) { [void][StudioSmb]::WNetCancelConnection2($target, 0, $true) }
+  $codes[$h] = $c
+}
+[Console]::Out.Write((ConvertTo-Json -Compress $codes))
+`;
+async function smbCodesAsMe(run2, hosts) {
+  if (hosts.length === 0) return {};
+  const r = await run2(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", SMB_AS_ME(hosts)],
+    {
+      env: powershellEnv(process.env),
+      timeoutMs: 12e4
+    }
+  );
+  try {
+    const raw = r.code === 0 ? JSON.parse(r.stdout.trim()) : void 0;
+    if (raw === void 0 || raw === null || typeof raw !== "object") return void 0;
+    const out = {};
+    for (const [k, v] of Object.entries(raw)) if (typeof v === "number") out[k] = v;
+    return out;
+  } catch {
+    return void 0;
+  }
 }
 
 // src/relay-windows.ts
@@ -41254,7 +41396,7 @@ icacls ${psQuote(machineStudio(o2.machine))} /reset /T /C /L /Q | Out-Null
 StrictFolder (Join-Path $machine 'broker\\tmp') @()
 # What the group carries, and the crew users of earlier versions or a crash go: with the tree
 # deleter compiled from the admin-only copy just made.
-${crewGroupFinish()}${lockdownSection(o2.lockdown === void 0 ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o2.lockdown, "@($relaySid, $groupSid)")}${POINT_AND_PRINT}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
+${crewGroupFinish()}${lockdownSection(o2.lockdown === void 0 ? lockdownPlan({ denyHosts: [], denyPorts: [] }) : o2.lockdown, "@($relaySid, $groupSid)")}${POINT_AND_PRINT}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
 # the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
 # point among them or just below the home.
 StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
@@ -41309,9 +41451,16 @@ var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text,
     if (Test-Path -LiteralPath $exe) {
       $sshdArgs = '-t -f "' + $tmp + '"'
       if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
-        $keyDir = Join-Path $env:ProgramData ('studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $keyDir | Out-Null
-        icacls $keyDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /L /Q | Out-Null
+        # Beside sshd_config, made with its final protected DACL (SYSTEM and administrators) in one
+        # step, and checked before use: no other account can put anything into it.
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))) }
+        $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        $keyDir = Join-Path $dir ('.studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
+        $null = [IO.Directory]::CreateDirectory($keyDir, $acl)
+        $made = Get-Item -LiteralPath $keyDir -Force
+        if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
         $key = Join-Path $keyDir 'host_ed25519'
         $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
         if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
@@ -41325,7 +41474,11 @@ var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text,
     if (Test-Path -LiteralPath $conf) { [IO.File]::Replace($tmp, $conf, [NullString]::Value) } else { [IO.File]::Move($tmp, $conf) }
   } finally {
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-    if ($keyDir) { Remove-Item -LiteralPath $keyDir -Recurse -Force -ErrorAction SilentlyContinue }
+    # Only the files it made, by name, then the empty folder: nothing is followed or recursed.
+    if ($keyDir) {
+      foreach ($f in @('host_ed25519', 'host_ed25519.pub')) { Remove-Item -LiteralPath (Join-Path $keyDir $f) -Force -ErrorAction SilentlyContinue }
+      Remove-Item -LiteralPath $keyDir -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 `;
@@ -41560,7 +41713,7 @@ SafeFolder $crewDir (Split-Path -Parent $crewDir)
 StrictFolder $crewDir @()
 StrictFolder (Join-Path $crewDir 'tmp') @()
 Copy-Item -LiteralPath ${psQuote(TREE_SOURCE())} -Destination (Join-Path $crewDir 'studio-tree.cs') -Force
-${crewGroupFinish()}${lockdownSection(o2.lockdown === void 0 ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o2.lockdown, "@($groupSid)")}${POINT_AND_PRINT}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
+${crewGroupFinish()}${lockdownSection(o2.lockdown === void 0 ? lockdownPlan({ denyHosts: [], denyPorts: [] }) : o2.lockdown, "@($groupSid)")}${POINT_AND_PRINT}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
 `;
 }
 var OWNER_RIGHTS = "*S-1-3-4";
@@ -44798,7 +44951,7 @@ async function verifyNotRunHereJobs(o2) {
   };
   let fetched;
   const jobs = [];
-  const covered = [];
+  const covered2 = [];
   for (const [i2, command] of o2.commands.entries()) {
     const fail4 = (why) => ({ ok: false, entry: i2 + 1, why });
     const named2 = o2.entries.find((e) => e.command.trim() === command.trim());
@@ -44850,11 +45003,11 @@ async function verifyNotRunHereJobs(o2) {
         return fail4("the job has no passing check on the pull request (missing or skipped)");
       }
       if (!jobs.some((j) => j.workflow === t.workflow && j.job === t.job)) jobs.push(t);
-      covered.push({ entry: i2 + 1, ...t, covers: named2.covers });
+      covered2.push({ entry: i2 + 1, ...t, covers: named2.covers });
     }
     if (jobs.length > MAX_JOBS) return fail4(`more than ${MAX_JOBS} CI jobs in all`);
   }
-  return { ok: true, jobs, covered };
+  return { ok: true, jobs, covered: covered2 };
 }
 function approvedJobsProblem(jobs, checks) {
   for (const [i2, j] of jobs.entries()) {
@@ -53452,24 +53605,24 @@ async function isBranchUpdate(ports, checkout, target, approved, head, depth = 1
 }
 async function sameTreeAsMerge(git2, checkout, first, second, head) {
   const g3 = (args, timeoutMs) => git2.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
-  const said = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
+  const said2 = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
   try {
     await g3(["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head], GIT_FETCH_MS3);
   } catch (e) {
-    return `cannot fetch ${head} to compare its tree: ${said(e)}`;
+    return `cannot fetch ${head} to compare its tree: ${said2(e)}`;
   }
   let merged;
   try {
     merged = await g3(["merge-tree", "--write-tree", first, second], GIT_LOCAL_MS3);
   } catch (e) {
     if (/failed \(1\):/.test(e.message)) return false;
-    return `git merge-tree failed; git 2.38 or newer is needed (see studio doctor): ${said(e)}`;
+    return `git merge-tree failed; git 2.38 or newer is needed (see studio doctor): ${said2(e)}`;
   }
   try {
     const tree = await g3(["rev-parse", "--verify", `${head}^{tree}`], GIT_LOCAL_MS3);
     return merged.trim() !== "" && merged.trim() === tree.trim();
   } catch (e) {
-    return `cannot read the tree of ${head}: ${said(e)}`;
+    return `cannot read the tree of ${head}: ${said2(e)}`;
   }
 }
 async function liveBase(gh, target) {
@@ -59697,7 +59850,7 @@ function recordApproval(ctx, rec, o2) {
   if (!BEFORE_TRIGGER.includes(rec.status)) {
     throw new Error(`${rec.id} is ${rec.status}: approvals count only before the trigger`);
   }
-  const said = verbatim(o2.said, 500, "--said");
+  const said2 = verbatim(o2.said, 500, "--said");
   const now = ctx.now();
   let who;
   if (o2.approver === "owner") {
@@ -59739,7 +59892,7 @@ function recordApproval(ctx, rec, o2) {
   const approval = {
     approver: o2.approver,
     who,
-    said,
+    said: said2,
     at: at2,
     recordedAt: now.toISOString(),
     recordedBy: o2.by
@@ -60874,7 +61027,7 @@ var COMMANDS = [
     about: "On the lead: pin the host key the worker proves with the pairing secret; write workers.relay.<label>"
   },
   {
-    usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--i-am-local] [--force-stop]",
+    usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--block-smb-lan] [--i-am-local] [--force-stop]",
     about: "On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead"
   },
   {
@@ -61421,13 +61574,12 @@ import { spawn as spawn6 } from "node:child_process";
 import {
   existsSync as existsSync19,
   mkdirSync as mkdirSync13,
-  mkdtempSync as mkdtempSync4,
   readFileSync as readFileSync56,
   renameSync as renameSync16,
   rmSync as rmSync13,
   writeFileSync as writeFileSync21
 } from "node:fs";
-import { homedir as homedir13, tmpdir as tmpdir4 } from "node:os";
+import { homedir as homedir13 } from "node:os";
 import { dirname as dirname19, join as join62, resolve as resolve13 } from "node:path";
 
 // src/relay-lead.ts
@@ -61544,7 +61696,8 @@ var probeAnswer = external_exports.strictObject({
 var startAnswer = external_exports.strictObject({
   ...base,
   ok: external_exports.literal(true),
-  state: external_exports.literal("starting")
+  state: external_exports.literal("starting"),
+  warnings
 });
 var statusAnswer = external_exports.strictObject({
   ...base,
@@ -62238,8 +62391,14 @@ async function relayDoctor(o2) {
       }
     }
     for (const w of hello.warnings) {
+      if (w === NO_LOCKDOWN && o2.acceptNoFirewall === true) {
+        lines2.push(`${o2.label}: note: ${w} (accepted: accept_no_firewall)`);
+        continue;
+      }
       ok = false;
-      lines2.push(`${o2.label}: ${w}`);
+      lines2.push(
+        w === NO_LOCKDOWN ? `${o2.label}: ${w}; fix: run studio relay install there without --no-firewall, or accept it with workers.relay.${o2.label}.accept_no_firewall: true` : `${o2.label}: ${w}`
+      );
     }
     const { answer: probe } = await relayCall(o2.transport, "probe", {}, { timeoutMs: 10 * 6e4 });
     if (!probe.ok) {
@@ -63529,7 +63688,12 @@ async function serveRelay(c3, input2, out) {
           busy: busy2 !== void 0 && busy2.lead === c3.lead ? busy2.id : null,
           held: held2 ?? null,
           pairProofs: c3.pairings === void 0 ? [] : pairProofs(readPairings(c3.pairings), c3.hostKey?.(), c3.ports.clock.now()).filter((p) => p.label === c3.lead || c3.lead === "default").slice(0, 20),
-          warnings: stored === void 0 ? [] : [stored]
+          // Every answer of a worker without its lockdown says so; the lead starts nothing there
+          // unless it accepted that (accept_no_firewall).
+          warnings: [
+            ...stored === void 0 ? [] : [stored],
+            ...c3.lockdownOff?.() === true ? [NO_LOCKDOWN] : []
+          ]
         });
       }
       case "probe": {
@@ -63615,7 +63779,10 @@ async function start(c3, job, bundle, out) {
       if (j.state === "held" || j.state === "refused") {
         return fail3(out, j.state, j.line ?? "not started");
       }
-      return answer(out, { state: "starting" });
+      return answer(out, {
+        state: "starting",
+        warnings: c3.lockdownOff?.() === true ? [NO_LOCKDOWN] : []
+      });
     }
     if (c3.ports.clock.now().getTime() >= until || !pidAlive2(pid)) {
       if (j !== void 0)
@@ -64448,11 +64615,11 @@ Write-Output 'done: Studio relay worker uninstalled'
 
 // src/relay-windows-check.ts
 import { readFileSync as readFileSync55 } from "node:fs";
-import { networkInterfaces as networkInterfaces2 } from "node:os";
+import { networkInterfaces as networkInterfaces3 } from "node:os";
 import { join as join60 } from "node:path";
 
 // src/relay-hosts.ts
-import { networkInterfaces } from "node:os";
+import { networkInterfaces as networkInterfaces2 } from "node:os";
 function ipv4Number(s) {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
   if (!m) return void 0;
@@ -64476,7 +64643,7 @@ var inRange = (r, ip) => r.bits === 0 || ip >>> 32 - r.bits === r.base >>> 32 - 
 function privateIpv4(ip) {
   return ip >>> 24 === 10 || ip >>> 20 === (172 << 4) + 1 || ip >>> 16 === (192 << 8) + 168;
 }
-function localSubnets(ifaces = networkInterfaces()) {
+function localSubnets(ifaces = networkInterfaces2()) {
   const out = [];
   for (const list2 of Object.values(ifaces)) {
     for (const a2 of list2 ?? []) {
@@ -64490,7 +64657,7 @@ function localSubnets(ifaces = networkInterfaces()) {
   }
   return out;
 }
-function ownAddresses(ifaces = networkInterfaces()) {
+function ownAddresses(ifaces = networkInterfaces2()) {
   return new Set(
     Object.values(ifaces).flatMap((l) => (l ?? []).map((a2) => a2.address.toLowerCase()))
   );
@@ -64631,7 +64798,7 @@ function relayWindows(o2) {
   const credFile = machineCredFile(o2.machine);
   const path10 = o2.env.PATH ?? o2.env.Path;
   const claudeBin = findClaude(path10) ?? "claude";
-  const ifaces = () => (o2.interfaces ?? networkInterfaces2)();
+  const ifaces = () => (o2.interfaces ?? networkInterfaces3)();
   const accounts = brokerCrewAccounts({
     run: run2,
     tasks: brokerTasks(o2.task),
@@ -64670,19 +64837,24 @@ function relayWindows(o2) {
       }
       const record2 = readInstallRecord(o2.machine);
       if (record2?.firewall === false) {
-        warnings2.push(
-          "no network lockdown (studio relay install --no-firewall): the relay account can reach the local network"
-        );
+        warnings2.push(NO_LOCKDOWN);
       } else {
         const lock = await (o2.lockdown ?? lockdownProblem)(run2);
         if (lock !== void 0) return { problem: { kind: "refused", line: lock }, warnings: warnings2 };
-        warnings2.push(
-          ...await denyNameDrift({
-            denyHosts: hosts,
-            recorded: record2?.lockdownNames ?? {},
-            ...o2.lookup === void 0 ? {} : { lookup: o2.lookup }
-          })
-        );
+        const drift = await denyNameDrift({
+          denyHosts: hosts,
+          recorded: record2?.lockdownNames ?? {},
+          ...o2.lookup === void 0 ? {} : { lookup: o2.lookup }
+        });
+        if (drift.length > 0) {
+          return {
+            problem: {
+              kind: "held",
+              line: `${drift.join("; ")}: run studio relay install again, elevated, so the firewall rules follow the names`
+            },
+            warnings: warnings2
+          };
+        }
       }
       const web = await webClientProblem(run2);
       if (web !== void 0) return { problem: { kind: "held", line: web }, warnings: warnings2 };
@@ -64726,6 +64898,19 @@ function relayWindows(o2) {
         warnings2.push(`SMB candidates: ${candidates.hosts.join(", ")}`);
       if (candidates.problem !== void 0) {
         return { problem: { kind: "refused", line: candidates.problem }, warnings: warnings2 };
+      }
+      if (candidates.hosts.length > 0) {
+        const codes = await (o2.smbAsMe ?? smbCodesAsMe)(run2, candidates.hosts);
+        const smb = smbProblem(candidates.hosts, codes);
+        if (smb !== void 0) {
+          return {
+            problem: {
+              kind: smb.kind,
+              line: smb.line.replace(/the crew user/g, "the relay account")
+            },
+            warnings: warnings2
+          };
+        }
       }
       const neighbors = candidates.hosts.filter((h2) => /^\d+\.\d+\.\d+\.\d+$/.test(h2)).slice(0, 8);
       const unreachable = [
@@ -65669,6 +65854,14 @@ async function startRelayItem(d, config2, item) {
     const { answer: hello } = await relayCall(transport, "hello", {}, { timeoutMs: 6e4 });
     if (!hello.ok) throw new HeldError(relayLine2(label, hello.line));
     if (hello.held !== null) throw new HeldError(relayLine2(label, hello.held));
+    if (hello.warnings.includes(NO_LOCKDOWN) && relayTarget(ownerConfig, label)?.acceptNoFirewall !== true) {
+      throw new HeldError(
+        relayLine2(
+          label,
+          `${NO_LOCKDOWN}; run studio relay install there without --no-firewall, or accept it with workers.relay.${label}.accept_no_firewall: true`
+        )
+      );
+    }
   } catch (e) {
     if (e instanceof RelayUnreachable) throw new HeldError(relayLine2(label, "unreachable"));
     throw e;
@@ -65929,7 +66122,8 @@ async function relayDoctorLines(owner, config2, seam) {
       transport: relayTransportFor(owner, label, seam),
       label,
       studioVersion: STUDIO_VERSION,
-      pins
+      pins,
+      acceptNoFirewall: relayTarget(ownerConfig, label)?.acceptNoFirewall === true
     });
     ok &&= r.ok;
     lines2.push(...r.lines);
@@ -65966,6 +66160,7 @@ function relayContext(o2) {
     load: o2.load ?? (() => systemLoad(root)),
     ...o2.pairings !== void 0 ? { pairings: o2.pairings } : native ? { pairings: machineOf() } : {},
     hostKey: o2.hostKey ?? (() => readHostKey(o2.env, platform2().platform)),
+    ...native ? { lockdownOff: () => readInstallRecord(machineOf())?.firewall === false } : {},
     log: o2.log,
     ...native ? {
       windows: relayWindows({
@@ -66149,8 +66344,31 @@ async function runRelayCommand(o2) {
   }
   return void 0;
 }
+var STDIN_RUNNER = Buffer.from(
+  "$s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())); try { & ([ScriptBlock]::Create($s)) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+  "utf16le"
+).toString("base64");
+var runScript = (exec, script, onOutput) => exec(
+  "powershell.exe",
+  [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-EncodedCommand",
+    STDIN_RUNNER
+  ],
+  {
+    onOutput,
+    input: Buffer.from(script.replace(/^#Requires .*\r?\n/gm, ""), "utf8").toString("base64")
+  }
+);
 var systemExec = (file4, args, o2 = {}) => new Promise((res) => {
-  const child = spawn6(file4, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn6(file4, args, {
+    windowsHide: true,
+    stdio: [o2.input === void 0 ? "ignore" : "pipe", "pipe", "pipe"]
+  });
+  if (o2.input !== void 0) child.stdin?.end(o2.input);
   let stdout = "";
   let stderr = "";
   const timer = setTimeout(() => child.kill(), o2.timeoutMs ?? 30 * 6e4);
@@ -66194,8 +66412,8 @@ function setupScriptFor(o2) {
 async function relayLockdown(o2) {
   if (o2.values["no-firewall"] === true) return null;
   return lockdownFor({
-    resolvers: () => dnsResolvers(o2.exec),
-    deny: serveSettings(relayOwner(o2.owner, o2.home, o2.machine)).deny
+    deny: serveSettings(relayOwner(o2.owner, o2.home, o2.machine)).deny,
+    blockSmbLan: o2.values["block-smb-lan"] === true
   });
 }
 var DEFAULT_SERVE_CONFIG = `# Studio relay worker (studio relay install). Optional; see the README, "Relay workers".
@@ -66297,28 +66515,17 @@ async function install(o2) {
   o2.stdout(
     "Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.\n"
   );
-  const dir = mkdtempSync4(join62(tmpdir4(), "studio-relay-install-"));
-  const file4 = join62(dir, "install.ps1");
-  writeFileSync21(
-    file4,
+  const r = await runScript(
+    exec,
     await o2.script({
       port,
       scope,
       ...o2.values["keep-passwords"] === true ? { keepPasswords: true } : {},
       ...o2.values["disable-spooler"] === true ? { disableSpooler: true } : {},
       ...o2.values["force-stop"] === true ? { forceStop: true } : {}
-    })
+    }),
+    o2.stdout
   );
-  let r;
-  try {
-    r = await exec(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file4],
-      { onOutput: o2.stdout }
-    );
-  } finally {
-    rmSync13(dir, { recursive: true, force: true });
-  }
   if (r.code !== 0) {
     o2.stderr("studio: relay install stopped; fix what it says and run it again (it repairs)\n");
     return 1;
@@ -66406,19 +66613,7 @@ async function uninstall(o2) {
       "No install record here (an install of an earlier version): services Studio stopped stay as they are.\n"
     );
   }
-  const dir = mkdtempSync4(join62(tmpdir4(), "studio-relay-uninstall-"));
-  const file4 = join62(dir, "uninstall.ps1");
-  writeFileSync21(file4, script);
-  let r;
-  try {
-    r = await exec(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file4],
-      { onOutput: o2.stdout }
-    );
-  } finally {
-    rmSync13(dir, { recursive: true, force: true });
-  }
+  const r = await runScript(exec, script, o2.stdout);
   if (r.code !== 0) {
     o2.stderr(
       "studio: relay uninstall stopped; fix what it says and run studio relay uninstall again (it goes on where it stopped)\n"
@@ -67402,11 +67597,12 @@ async function runCli(argv, deps) {
       values["i-am-local"],
       values["force-stop"],
       values["keep-tree"],
-      values["force-path"]
+      values["force-path"],
+      values["block-smb-lan"]
     ];
     if (relayOnly.some((v) => v !== void 0) && cmd !== "relay") {
       throw new UsageError(
-        "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop, --keep-tree and --force-path work with relay only"
+        "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop, --keep-tree, --force-path and --block-smb-lan work with relay only"
       );
     }
     if (values["no-firewall"] !== void 0 && cmd !== "relay" && cmd !== "worker") {
@@ -68224,7 +68420,7 @@ async function runCli(argv, deps) {
       const reviewDone = item.type === "review" && report.status === "done" && accepts === void 0 ? reviewCaps() : { skipped: [], target: void 0, notRunHere: void 0 };
       timeoutHold();
       let approvedJobs = [];
-      let covered = [];
+      let covered2 = [];
       let applied = [];
       if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0) {
         const m = /^(.+)#(\d+)$/.exec(reviewDone.target);
@@ -68337,7 +68533,7 @@ async function runCli(argv, deps) {
               };
             }
             approvedJobs = gate.jobs;
-            covered = gate.covered;
+            covered2 = gate.covered;
           }
         }
       }
@@ -68642,7 +68838,7 @@ async function runCli(argv, deps) {
         } : {},
         // Each approved job with the reviewer's reason why it covers its command: reviewer text,
         // one plain line each, data for the lead. The gate proved only that the job ran and passed.
-        ...covered.length === 0 || supersededBy !== void 0 ? {} : { notRunHereJobs: covered }
+        ...covered2.length === 0 || supersededBy !== void 0 ? {} : { notRunHereJobs: covered2 }
       };
       return { kind: "moved", out };
     };
@@ -69624,7 +69820,6 @@ async function runCli(argv, deps) {
             );
           }
           const lockdown = values["no-firewall"] === true ? null : await lockdownFor({
-            resolvers: () => dnsResolvers(runFile2),
             deny: ownerConfig.workers?.self?.deny ?? { hosts: [], ports: [] }
           });
           stdout(
@@ -71302,13 +71497,13 @@ warning: ${rollbackChangedLine(r)}
           if (values.said === void 0) {
             throw new UsageError('release approve needs --said "<their words, verbatim>"');
           }
-          const said = values.said;
+          const said2 = values.said;
           const root2 = await boundStateRoot();
           const r = await withReleases({ stateRoot: root2, ...clock }, (all, save) => {
             const done = recordApproval({ stateRoot: root2, ...clock }, findRelease(all, id), {
               approver,
               by,
-              said,
+              said: said2,
               ...values.by === void 0 ? {} : { who: values.by },
               ...values.at === void 0 ? {} : { at: values.at }
             });
@@ -71566,7 +71761,8 @@ function parseCli(argv) {
         "disable-spooler": { type: "boolean" },
         "keep-tree": { type: "boolean" },
         "no-firewall": { type: "boolean" },
-        "force-path": { type: "boolean" }
+        "force-path": { type: "boolean" },
+        "block-smb-lan": { type: "boolean" }
       },
       allowPositionals: true,
       strict: true

@@ -11,7 +11,7 @@ import { LOOPBACK } from './egress-proxy.js';
 import { HeldError } from './held.js';
 import type { Ports } from './ports.js';
 import { localSubnets, ownAddresses, smbCandidates, smbProblem } from './relay-hosts.js';
-import { denyNameDrift, lockdownProblem } from './relay-lockdown.js';
+import { denyNameDrift, lockdownProblem, NO_LOCKDOWN, smbCodesAsMe } from './relay-lockdown.js';
 import type { RelayWindows } from './relay-serve.js';
 import { readInstallRecord } from './relay-uninstall.js';
 import {
@@ -102,6 +102,8 @@ export function relayWindows(o: {
   lockdown?: (run: RunFile) => Promise<string | undefined>;
   /** Seam for tests: name resolution of deny.hosts. */
   lookup?: (name: string) => Promise<string[]>;
+  /** Seam for tests: the SMB check as the relay account. */
+  smbAsMe?: (run: RunFile, hosts: readonly string[]) => Promise<Record<string, number> | undefined>;
 }): RelayWindows {
   const run = o.run ?? runFile;
   const credFile = machineCredFile(o.machine);
@@ -152,20 +154,27 @@ export function relayWindows(o: {
       // an install with --no-firewall goes without, and doctor says so.
       const record = readInstallRecord(o.machine);
       if (record?.firewall === false) {
-        warnings.push(
-          'no network lockdown (studio relay install --no-firewall): the relay account can reach the local network',
-        );
+        warnings.push(NO_LOCKDOWN);
       } else {
+        // The rule in the active policy, every profile on, every local prefix inside the rule, and
+        // the firewall's own refusal from the fixed targets and an IPv6 one.
         const lock = await (o.lockdown ?? lockdownProblem)(run);
         if (lock !== undefined) return { problem: { kind: 'refused', line: lock }, warnings };
-        // A name of deny.hosts that moved since the install: a warning, doctor shows it.
-        warnings.push(
-          ...(await denyNameDrift({
-            denyHosts: hosts,
-            recorded: record?.lockdownNames ?? {},
-            ...(o.lookup === undefined ? {} : { lookup: o.lookup }),
-          })),
-        );
+        // Every name of deny.hosts resolved anew: one past its rule holds the start.
+        const drift = await denyNameDrift({
+          denyHosts: hosts,
+          recorded: record?.lockdownNames ?? {},
+          ...(o.lookup === undefined ? {} : { lookup: o.lookup }),
+        });
+        if (drift.length > 0) {
+          return {
+            problem: {
+              kind: 'held',
+              line: `${drift.join('; ')}: run studio relay install again, elevated, so the firewall rules follow the names`,
+            },
+            warnings,
+          };
+        }
       }
       const web = await webClientProblem(run);
       if (web !== undefined) return { problem: { kind: 'held', line: web }, warnings };
@@ -213,6 +222,21 @@ export function relayWindows(o: {
         warnings.push(`SMB candidates: ${candidates.hosts.join(', ')}`);
       if (candidates.problem !== undefined) {
         return { problem: { kind: 'refused', line: candidates.problem }, warnings };
+      }
+      // SMB goes through the redirector in the System process, past every per-user rule: the relay
+      // account must not open a session either (the crew user's probe below checks the crew user).
+      if (candidates.hosts.length > 0) {
+        const codes = await (o.smbAsMe ?? smbCodesAsMe)(run, candidates.hosts);
+        const smb = smbProblem(candidates.hosts, codes);
+        if (smb !== undefined) {
+          return {
+            problem: {
+              kind: smb.kind,
+              line: smb.line.replace(/the crew user/g, 'the relay account'),
+            },
+            warnings,
+          };
+        }
       }
       // Hosts of the network found above: a direct connection to them must fail (the firewall rule
       // of the crew user). This machine's own addresses count as loopback for Windows and are left

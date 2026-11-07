@@ -504,7 +504,7 @@ icacls ${psQuote(machineStudio(o.machine))} /reset /T /C /L /Q | Out-Null
 StrictFolder (Join-Path $machine 'broker\\tmp') @()
 # What the group carries, and the crew users of earlier versions or a crash go: with the tree
 # deleter compiled from the admin-only copy just made.
-${crewGroupFinish()}${lockdownSection(o.lockdown === undefined ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o.lockdown, '@($relaySid, $groupSid)')}${POINT_AND_PRINT}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
+${crewGroupFinish()}${lockdownSection(o.lockdown === undefined ? lockdownPlan({ denyHosts: [], denyPorts: [] }) : o.lockdown, '@($relaySid, $groupSid)')}${POINT_AND_PRINT}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
 # the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
 # point among them or just below the home.
 StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
@@ -571,9 +571,16 @@ export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [stri
     if (Test-Path -LiteralPath $exe) {
       $sshdArgs = '-t -f "' + $tmp + '"'
       if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
-        $keyDir = Join-Path $env:ProgramData ('studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $keyDir | Out-Null
-        icacls $keyDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /L /Q | Out-Null
+        # Beside sshd_config, made with its final protected DACL (SYSTEM and administrators) in one
+        # step, and checked before use: no other account can put anything into it.
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))) }
+        $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        $keyDir = Join-Path $dir ('.studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
+        $null = [IO.Directory]::CreateDirectory($keyDir, $acl)
+        $made = Get-Item -LiteralPath $keyDir -Force
+        if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
         $key = Join-Path $keyDir 'host_ed25519'
         $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
         if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
@@ -587,7 +594,11 @@ export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [stri
     if (Test-Path -LiteralPath $conf) { [IO.File]::Replace($tmp, $conf, [NullString]::Value) } else { [IO.File]::Move($tmp, $conf) }
   } finally {
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-    if ($keyDir) { Remove-Item -LiteralPath $keyDir -Recurse -Force -ErrorAction SilentlyContinue }
+    # Only the files it made, by name, then the empty folder: nothing is followed or recursed.
+    if ($keyDir) {
+      foreach ($f in @('host_ed25519', 'host_ed25519.pub')) { Remove-Item -LiteralPath (Join-Path $keyDir $f) -Force -ErrorAction SilentlyContinue }
+      Remove-Item -LiteralPath $keyDir -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 `;
