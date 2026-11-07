@@ -565,6 +565,9 @@ export const relayTargetSchema = z.strictObject({
     .min(2)
     .max(500)
     .refine((p) => isAbsolute(p), 'must be an absolute path'),
+  // A worker installed with --no-firewall: its missing network lockdown is accepted (doctor notes
+  // it, starts go on); without this, doctor fails and nothing starts there.
+  acceptNoFirewall: z.boolean().optional(),
   // How long the worker may be unreachable before the item goes to the lead.
   graceMinutes: z
     .number()

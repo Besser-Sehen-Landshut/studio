@@ -194,7 +194,7 @@ SafeFolder $crewDir (Split-Path -Parent $crewDir)
 StrictFolder $crewDir @()
 StrictFolder (Join-Path $crewDir 'tmp') @()
 Copy-Item -LiteralPath ${psQuote(TREE_SOURCE())} -Destination (Join-Path $crewDir 'studio-tree.cs') -Force
-${crewGroupFinish()}${lockdownSection(o.lockdown === undefined ? lockdownPlan({ resolvers: [], denyHosts: [], denyPorts: [] }) : o.lockdown, '@($groupSid)')}${POINT_AND_PRINT}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
+${crewGroupFinish()}${lockdownSection(o.lockdown === undefined ? lockdownPlan({ denyHosts: [], denyPorts: [] }) : o.lockdown, '@($groupSid)')}${POINT_AND_PRINT}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
 `;
 }
 

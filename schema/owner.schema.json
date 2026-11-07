@@ -414,6 +414,9 @@
                 "minLength": 2,
                 "maxLength": 500
               },
+              "accept_no_firewall": {
+                "type": "boolean"
+              },
               "grace_minutes": {
                 "default": 30,
                 "type": "integer",
