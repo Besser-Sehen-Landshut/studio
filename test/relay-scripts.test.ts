@@ -13,7 +13,7 @@ import {
   relaySetupScript,
   sshdMatchBlock,
 } from '../src/relay-windows.js';
-import { KEEPER_SCRIPT, windowsSetupScript } from '../src/windows-sandbox.js';
+import { KEEPER_SCRIPT, systemTool, windowsSetupScript } from '../src/windows-sandbox.js';
 
 const scripts: Record<string, string> = {
   'crew sweep': crewAccountScript({
@@ -98,6 +98,28 @@ const scripts: Record<string, string> = {
 /** Words that only ever follow a backslash in a Windows path. */
 const GLUED =
   /(Software|SOFTWARE|Microsoft|Windows|Windows NT|CurrentVersion|Explorer|ProgramData|System32|OpenSSH)(Microsoft|Windows|CurrentVersion|Explorer|Classes|Run\b|RunOnce|User Shell|Shell Folders|Command Processor|ProfileList|ssh|OpenSSH|sshd)/;
+
+describe('elevated runs start nothing from the cwd or a user folder', () => {
+  it('system tools by absolute path on Windows; as named elsewhere and for anything else', () => {
+    const env = { SystemRoot: 'C:\\Windows' };
+    expect(systemTool('powershell.exe', env, 'win32')).toBe(
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    );
+    expect(systemTool('icacls', env, 'win32')).toBe('C:\\Windows\\System32\\icacls.exe');
+    expect(systemTool('schtasks.exe', env, 'win32')).toBe('C:\\Windows\\System32\\schtasks.exe');
+    expect(systemTool('whoami', env, 'win32')).toBe('C:\\Windows\\System32\\whoami.exe');
+    expect(systemTool('tailscale', env, 'win32')).toBe('tailscale');
+    expect(systemTool('powershell.exe', env, 'linux')).toBe('powershell.exe');
+  });
+  it('every elevated script searches the machine PATH only', () => {
+    for (const name of ['install', 'setup', 'native setup', 'crew retire', 'uninstall']) {
+      expect(scripts[name], name).toContain(
+        "$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')",
+      );
+      expect(scripts[name], name).not.toContain("GetEnvironmentVariable('Path', 'User')");
+    }
+  });
+});
 
 describe('the generated PowerShell keeps its backslashes', () => {
   for (const [name, text] of Object.entries(scripts)) {

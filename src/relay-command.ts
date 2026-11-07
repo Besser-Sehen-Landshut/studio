@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, win32 } from 'node:path';
 import { crewClaudeDir } from './accounts.js';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import {
@@ -36,6 +36,7 @@ import { activeParks, blockHold, parkUntil, readLimits, writeLimits } from './li
 import { ensureStateDir, ownerStateRootFor, removeStateEntry, withBoardLock } from './paths.js';
 import { pinnedPlugins, STUDIO_REPOSITORY, STUDIO_VERSION } from './plugins.js';
 import type { Ports } from './ports.js';
+import { bootstrapCommand, leadAnchor } from './relay-bootstrap.js';
 import {
   collectRelay,
   followRelay,
@@ -103,7 +104,7 @@ import {
 } from './relay-windows.js';
 import { elevated, machineTreeProblem, relayWindows } from './relay-windows-check.js';
 import { labelUsage, recordRun, USAGE_UNREADABLE } from './usage.js';
-import { findClaude, runFile } from './windows-sandbox.js';
+import { findClaude, runFile, systemTool } from './windows-sandbox.js';
 import { pinnedMain } from './worker.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { updateWorkers, workerCrewName } from './worker-lead.js';
@@ -832,6 +833,21 @@ export async function runRelayCommand(o: {
   if (sub === 'unpair' && args.length === 1) {
     return await unpair({ ...o, home, machine, relayUser, label: args[0] as string });
   }
+  if (sub === 'bootstrap' && args.length === 1 && args[0] === 'anchor') {
+    // What this Studio expects of its release's bootstrap and bundle (the release workflow checks
+    // the published assets against it).
+    o.stdout(
+      `${JSON.stringify({ version: STUDIO_VERSION, repository: STUDIO_REPOSITORY, ...leadAnchor() })}\n`,
+    );
+    return 0;
+  }
+  if (sub === 'bootstrap' && args.length === 1 && args[0] === 'uninstall') {
+    // The line that removes a relay worker with the bootstrap of this Studio, checked as for pairing.
+    o.stdout(
+      `On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH):\n  ${bootstrapCommand({ uninstall: true })}\n`,
+    );
+    return 0;
+  }
   if (sub === 'pair' && o.values.connect !== true && args.length === 2) {
     return await pairStart({ ...o, label: args[0] as string, host: args[1] as string });
   }
@@ -907,7 +923,7 @@ export const scriptOfRun = (o: { input?: string } | undefined): string | undefin
 
 const systemExec: Exec = (file, args, o = {}) =>
   new Promise((res) => {
-    const child = spawn(file, args, {
+    const child = spawn(systemTool(file), args, {
       windowsHide: true,
       stdio: [o.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
@@ -957,7 +973,16 @@ function setupScriptFor(o: {
       ...(claude === undefined ? [] : [dirname(claude)]),
       ...loadOwnerConfig(o.owner).crewToolchainPaths,
     ],
-    source: { node: process.execPath, studio: resolve(dirname(STUDIO_BIN), '..') },
+    // Node.js for all users, where only administrators change it: never the node this CLI runs on,
+    // which may lie in a folder of the user's.
+    source: {
+      node: win32.join(
+        o.env.ProgramFiles ?? o.env.PROGRAMFILES ?? 'C:\\Program Files',
+        'nodejs',
+        'node.exe',
+      ),
+      studio: resolve(dirname(STUDIO_BIN), '..'),
+    },
     ...(o.install === undefined ? {} : { install: o.install }),
     lockdown: o.lockdown,
   });
@@ -1304,13 +1329,6 @@ function leadFilesProblem(owner: OwnerEnv, key: string, platform: WorkerPlatform
   }
 }
 
-/**
- * The one line that sets up a Windows relay worker from nothing: the bootstrap of this Studio's
- * release, which checks the bundle by its SHA-256 and runs `relay install --pair`.
- */
-export const bootstrapCommand = (line: string, version = STUDIO_VERSION): string =>
-  `& ([scriptblock]::Create((irm https://github.com/${STUDIO_REPOSITORY}/releases/download/v${version}/studio-relay-bootstrap.ps1))) -Pair '${line}'`;
-
 /** `studio relay pair <label> <host>` on the lead: the key and the one pairing line. */
 async function pairStart(o: {
   platform?: WorkerPlatform;
@@ -1363,7 +1381,7 @@ async function pairStart(o: {
   });
   const line = renderPairLine({ label: o.label, secret, key: pub });
   o.stdout(
-    `On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH), within the hour:\n  ${bootstrapCommand(line)}\nIt installs Node.js and Git if missing (it asks first), Studio ${STUDIO_VERSION} and the relay worker.\nWith Studio there already: studio relay install --pair "${line}"\nThen here: studio relay pair ${o.label} --connect\nThe line holds a single-use secret: paste it on the worker only.\n`,
+    `On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH), within the hour:\n  ${bootstrapCommand({ pair: line })}\nIt installs Node.js and Git if missing (it asks first), Studio ${STUDIO_VERSION} and the relay worker.\nWith Studio there already: studio relay install --pair "${line}"\nThen here: studio relay pair ${o.label} --connect\nThe line holds a single-use secret: paste it on the worker only.\n`,
   );
   return 0;
 }

@@ -3510,7 +3510,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         });
         if (code === undefined) {
           throw new UsageError(
-            'relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], uninstall, unpair <label>, setup, serve, run <id>',
+            'relay takes: pair <label> <host>, pair <label> --connect, bootstrap anchor, bootstrap uninstall, install [--pair <line>], uninstall, unpair <label>, setup, serve, run <id>',
           );
         }
         return code;
