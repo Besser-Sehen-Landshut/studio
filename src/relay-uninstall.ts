@@ -418,6 +418,7 @@ ${
 }
 `
 }${step(9, 'services Studio changed')}
-${restoreSteps(o.record)}Write-Output 'done: Studio relay worker uninstalled'
+${restoreSteps(o.record)}Write-Output 'left installed: Git, Node.js and Claude Code (other programs may use them); to remove them: winget uninstall --id Git.Git; winget uninstall --id OpenJS.NodeJS.LTS; winget uninstall --id Anthropic.ClaudeCode'
+Write-Output 'done: Studio relay worker uninstalled'
 `;
 }
