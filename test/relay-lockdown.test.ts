@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { relayTargetSchema } from '../src/config.js';
+import { relayTargetSchema, workerDenySchema } from '../src/config.js';
 import { crewAccountFunctions, TREE_SOURCE } from '../src/crew-accounts.js';
 import { checkedAddress, ipv4, onLinkBlockList } from '../src/egress-proxy.js';
 import { realPorts } from '../src/ports.js';
@@ -336,6 +336,11 @@ describe('the check before every relay start', () => {
     const other = good();
     (other.rules[0] as LockdownState['rules'][number]).users = 'D:(A;;CC;;;S-1-5-21-9)';
     expect(judgeLockdown(other)).toMatch(/does not hold the relay account/);
+    // A longer SID that starts with this one is another account: the ACE's SID must match whole.
+    const longer = good();
+    (longer.rules[0] as LockdownState['rules'][number]).users = `D:(A;;CC;;;${me}0)`;
+    expect(judgeLockdown(longer)).toMatch(/does not hold the relay account/);
+    expect(lockdownSection(lockdownPlan(empty), '@()')).toContain("$who.Contains(';' + $s + ')')");
     expect(
       judgeLockdown({ ...good(), connect: { ...all('10013'), '[fe80::1%12]:445': 'timeout' } }),
     ).toMatch(/\[fe80::1%12\]:445 timed out/);
@@ -354,7 +359,7 @@ describe('the check before every relay start', () => {
         enabled: 'True',
         action: 'Block',
         direction: 'Outbound',
-        users: me,
+        users: `D:(A;;CC;;;${me})`,
         remote: `${ipv4(10, 0, 0, 0)}/8`,
       },
       routes: `${ipv4(10, 4, 0, 0)}/16`,
@@ -556,6 +561,22 @@ describe('a worker without its lockdown, as the lead sees it', () => {
     expect(yes.ok).toBe(true);
     expect(yes.lines.join('\n')).toContain('note: no network lockdown');
   });
+  it('deny.prefixes: further networks of either family become part of the rule; nonsense is refused', () => {
+    const p = lockdownPlan({
+      ...empty,
+      denyPrefixes: ['2001:db8:ab00::/56', `${ipv4(203, 0, 113, 0)}/24`],
+    });
+    expect(p.hosts).toEqual([
+      '2001:db8:ab00:0:0:0:0:0-2001:db8:ab00:ff:ffff:ffff:ffff:ffff',
+      `${ipv4(203, 0, 113, 0)}-${ipv4(203, 0, 113, 255)}`,
+    ]);
+    const deny = (prefixes: string[]) => workerDenySchema.safeParse({ prefixes }).success;
+    expect(deny(['2001:db8::/56', `${ipv4(203, 0, 113, 0)}/24`])).toBe(true);
+    expect(deny(['2001:db8::/129'])).toBe(false);
+    expect(deny(['nas.example/24'])).toBe(false);
+    expect(deny([`${ipv4(203, 0, 113, 0)}`])).toBe(false);
+  });
+
   it('the lead config takes accept_no_firewall, off by default', () => {
     const base = {
       host: 'worker.example',
