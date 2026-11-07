@@ -546,7 +546,7 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Set-Service -Name WebClient -StartupType Disabled
 }
 # What this machine had before, and what the install did: studio relay uninstall reads it.
-${recordSnippet({ machine: o.machine, spoolerDisabled: o.install?.disableSpooler === true, firewall: o.lockdown !== null })}# The pinned plugins in the crew Claude config dir of the relay home.
+${recordSnippet({ machine: o.machine, spoolerDisabled: o.install?.disableSpooler === true, firewall: o.lockdown !== null, names: o.lockdown?.names ?? {} })}# The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
 ${o.install === undefined ? setupTail(block) : installTail(block, o.install)}`;
 }
@@ -665,13 +665,15 @@ const recordSnippet = (o: {
   machine: string;
   spoolerDisabled: boolean;
   firewall: boolean;
+  /** The deny.hosts names and the addresses their rules hold. */
+  names: Record<string, string[]>;
 }) => `$recordFile = ${psQuote(installRecordFile(o.machine))}
 $old = $null
 if (Test-Path -LiteralPath $recordFile) { try { $old = Get-Content -Raw -LiteralPath $recordFile | ConvertFrom-Json } catch { $old = $null } }
 if ($null -ne $old) { $prior = $old.prior }
 elseif ($priorMachine) { $prior = $null }
 else { $prior = @{ webClient = $priorWebClient; spooler = $priorSpooler; sshd = $priorSshd; sshdRule = $priorSshdRule; sshdCapability = $priorSshdCapability; pointAndPrint = $priorPnp } }
-$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o.spoolerDisabled ? '$true' : '$false'} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); firewall = ${o.firewall ? '$true' : '$false'}; prior = $prior }
+$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o.spoolerDisabled ? '$true' : '$false'} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); firewall = ${o.firewall ? '$true' : '$false'}; lockdownNames = (ConvertFrom-Json ${psQuote(JSON.stringify(o.names))}); prior = $prior }
 $tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
 [IO.File]::WriteAllText($tmp, (ConvertTo-Json -Compress -Depth 6 $record), (New-Object Text.ASCIIEncoding))
 icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null

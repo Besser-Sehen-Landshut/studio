@@ -40669,6 +40669,7 @@ function lockdownPlan(o2) {
   }
   holes.sort((a2, b) => a2.v6 === b.v6 ? a2.lo < b.lo ? -1 : 1 : a2.v6 ? 1 : -1);
   const hosts = [];
+  const names = {};
   const add = (s) => {
     if (s === void 0) return;
     const t = spanText(s);
@@ -40688,6 +40689,7 @@ function lockdownPlan(o2) {
       continue;
     }
     const got = o2.resolved?.[h2] ?? [];
+    names[h2] = [...got];
     if (got.length === 0) {
       notes.push(`deny.hosts ${h2}: does not resolve now, so no firewall rule holds it`);
       continue;
@@ -40700,8 +40702,41 @@ function lockdownPlan(o2) {
     resolvers: holes.map(spanText),
     hosts,
     ports: [...new Set(o2.denyPorts)].sort((a2, b) => a2 - b),
-    notes
+    notes,
+    names
   };
+}
+function inLocalRange(address) {
+  const s = addressSpan(address);
+  return s !== void 0 && localSpans().some((l) => l.v6 === s.v6 && s.lo >= l.lo && s.hi <= l.hi);
+}
+async function denyNameDrift(o2) {
+  const lookup2 = o2.lookup ?? (async (name) => {
+    try {
+      return (await dnsLookup(name, { all: true })).map((a2) => a2.address);
+    } catch {
+      return [];
+    }
+  });
+  const out = [];
+  for (const h2 of o2.denyHosts) {
+    if (h2 === "local-subnets" || h2 === "tailnet-peers" || h2.includes("/")) continue;
+    if (addressSpan(h2) !== void 0) continue;
+    const held2 = o2.recorded[h2];
+    if (held2 === void 0) {
+      out.push(
+        `deny.hosts ${h2} has no firewall rule yet (added after the install): run studio relay install again`
+      );
+      continue;
+    }
+    const now = (await lookup2(h2)).filter((a2) => !inLocalRange(a2) && !held2.includes(a2));
+    if (now.length > 0) {
+      out.push(
+        `deny.hosts ${h2} now resolves to ${now.join(", ")}, which no firewall rule holds: run studio relay install again`
+      );
+    }
+  }
+  return out;
 }
 var PROBE_FIXED = LOCAL_V4.map(
   ([a2, b, c3, d]) => `${ipv43(a2, b, c3, d + 1)}:445`
@@ -41258,7 +41293,7 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Set-Service -Name WebClient -StartupType Disabled
 }
 # What this machine had before, and what the install did: studio relay uninstall reads it.
-${recordSnippet({ machine: o2.machine, spoolerDisabled: o2.install?.disableSpooler === true, firewall: o2.lockdown !== null })}# The pinned plugins in the crew Claude config dir of the relay home.
+${recordSnippet({ machine: o2.machine, spoolerDisabled: o2.install?.disableSpooler === true, firewall: o2.lockdown !== null, names: o2.lockdown?.names ?? {} })}# The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
 ${o2.install === void 0 ? setupTail(block) : installTail(block, o2.install)}`;
 }
@@ -41318,7 +41353,7 @@ if (Test-Path -LiteralPath $recordFile) { try { $old = Get-Content -Raw -Literal
 if ($null -ne $old) { $prior = $old.prior }
 elseif ($priorMachine) { $prior = $null }
 else { $prior = @{ webClient = $priorWebClient; spooler = $priorSpooler; sshd = $priorSshd; sshdRule = $priorSshdRule; sshdCapability = $priorSshdCapability; pointAndPrint = $priorPnp } }
-$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o2.spoolerDisabled ? "$true" : "$false"} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); firewall = ${o2.firewall ? "$true" : "$false"}; prior = $prior }
+$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o2.spoolerDisabled ? "$true" : "$false"} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); firewall = ${o2.firewall ? "$true" : "$false"}; lockdownNames = (ConvertFrom-Json ${psQuote(JSON.stringify(o2.names))}); prior = $prior }
 $tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
 [IO.File]::WriteAllText($tmp, (ConvertTo-Json -Compress -Depth 6 $record), (New-Object Text.ASCIIEncoding))
 icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
@@ -64183,6 +64218,16 @@ function parseInstallRecord(raw) {
     readPaths: paths.filter((x) => typeof x === "string"),
     spoolerDisabled: r.spoolerDisabled === true,
     ...typeof r.firewall === "boolean" ? { firewall: r.firewall } : {},
+    ...r.lockdownNames !== null && typeof r.lockdownNames === "object" ? {
+      lockdownNames: Object.fromEntries(
+        Object.entries(r.lockdownNames).map(([k, v]) => [
+          k,
+          (Array.isArray(v) ? v : v === void 0 || v === null ? [] : [v]).filter(
+            (x) => typeof x === "string"
+          )
+        ])
+      )
+    } : {},
     prior
   };
 }
@@ -64416,7 +64461,8 @@ ${o2.keepTree ? "" : `foreach ($p in @($home_, $machine)) {
   if ((Test-Path -LiteralPath $up) -and @(Get-ChildItem -LiteralPath $up -Force).Count -eq 0) { Remove-Item -LiteralPath $up -Force; Write-Output "removed: $up" }
 }
 `}${step(9, "services Studio changed")}
-${restoreSteps(o2.record)}Write-Output 'done: Studio relay worker uninstalled'
+${restoreSteps(o2.record)}Write-Output 'left installed: Git, Node.js and Claude Code (other programs may use them); to remove them: winget uninstall --id Git.Git; winget uninstall --id OpenJS.NodeJS.LTS; winget uninstall --id Anthropic.ClaudeCode'
+Write-Output 'done: Studio relay worker uninstalled'
 `;
 }
 
@@ -64642,13 +64688,21 @@ function relayWindows(o2) {
           warnings: warnings2
         };
       }
-      if (readInstallRecord(o2.machine)?.firewall === false) {
+      const record2 = readInstallRecord(o2.machine);
+      if (record2?.firewall === false) {
         warnings2.push(
           "no network lockdown (studio relay install --no-firewall): the relay account can reach the local network"
         );
       } else {
         const lock = await (o2.lockdown ?? lockdownProblem)(run2);
         if (lock !== void 0) return { problem: { kind: "refused", line: lock }, warnings: warnings2 };
+        warnings2.push(
+          ...await denyNameDrift({
+            denyHosts: hosts,
+            recorded: record2?.lockdownNames ?? {},
+            ...o2.lookup === void 0 ? {} : { lookup: o2.lookup }
+          })
+        );
       }
       const web = await webClientProblem(run2);
       if (web !== void 0) return { problem: { kind: "held", line: web }, warnings: warnings2 };
