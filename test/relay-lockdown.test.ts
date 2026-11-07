@@ -172,7 +172,9 @@ describe('the lockdown in the setup scripts', () => {
     expect(s.indexOf('$null = RetireJobUsers', fin)).toBeGreaterThan(fin);
     // Every target must be the firewall's own refusal.
     // Every target is the firewall's refusal or has no route at all, and one at least is refused.
-    expect(s).toContain("@('10051', '10065', '10013') -notcontains $after[$_]");
+    expect(s).toContain("@('10051', '10065', '10049', '10013') -notcontains $after[$_]");
+    // Neighbors are hosts: no broadcast address, no permanent (static or multicast) entry.
+    expect(s).toContain("-notmatch '\\.(0|255)$'");
     expect(s).toContain('$refused -eq 0');
     // The probe script goes as a file in an admin-only folder (a credential logon's command line
     // holds 1024 characters), its answer in the same folder.
