@@ -22,6 +22,7 @@ import { type Ports, realPorts } from '../src/ports.js';
 import { installNotifySecret, newNtfyTopic, readNotifySecret } from '../src/push.js';
 import { recordSetupSkip } from '../src/rea-consent.js';
 import { SHIM_MARKER } from '../src/setup.js';
+import type { WorkerPlatform } from '../src/worker-deny.js';
 
 const root = mkdtempSync(join(tmpdir(), 'studio-setup-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -46,6 +47,10 @@ type Opts = {
   httpReply?: { ok: boolean; status?: number };
   /** The optional REA step was skipped before; default true, so the other tests ask nothing more. */
   researchSkipped?: boolean;
+  /** No `claude` on PATH; by default a stand-in is there. */
+  noClaude?: boolean;
+  /** No bubblewrap and socat on PATH; by default stand-ins are there. */
+  noSandbox?: boolean;
 };
 
 /** A fake plugin launcher that prints its version and arguments. */
@@ -132,7 +137,20 @@ function fixture(o: Opts = {}) {
   if (o.notified !== false)
     installNotifySecret({ transport: 'ntfy', topic: newNtfyTopic() }, owner);
   if (o.researchSkipped !== false) recordSetupSkip(ownerStateRootFor(owner), new Date());
-  return { base, project, home, env, owner, ports, launcher, localBin, tokens, pluginRuns, posts };
+  return {
+    base,
+    project,
+    home,
+    env,
+    owner,
+    ports,
+    launcher,
+    localBin,
+    tokens,
+    pluginRuns,
+    posts,
+    gone: [...(o.noClaude ? ['claude'] : []), ...(o.noSandbox ? ['bwrap', 'socat'] : [])],
+  };
 }
 type Fx = ReturnType<typeof fixture>;
 
@@ -143,13 +161,23 @@ type Io = {
   role?: string;
 };
 
-async function setup(fx: Fx, argv: string[] = [], io: Io = {}) {
+const LINUX: WorkerPlatform = { platform: 'linux', wsl: 'none', automountRoot: '/mnt/' };
+
+async function setup(
+  fx: Fx,
+  argv: string[] = [],
+  io: Io & { platform?: WorkerPlatform; env?: Record<string, string> } = {},
+) {
   let out = '';
   let err = '';
   const asked: string[] = [];
   const secrets = [...(io.secrets ?? [])];
   const lines = [...(io.lines ?? [])];
-  const env = io.role === undefined ? fx.env : { ...fx.env, STUDIO_ROLE: io.role };
+  const env = {
+    ...fx.env,
+    ...(io.role === undefined ? {} : { STUDIO_ROLE: io.role }),
+    ...(io.env ?? {}),
+  };
   const code = await runCli(['--project', fx.project, 'setup', ...argv], {
     ports: fx.ports,
     stdout: (s) => {
@@ -171,6 +199,10 @@ async function setup(fx: Fx, argv: string[] = [], io: Io = {}) {
       return lines.shift();
     },
     launcher: fx.launcher,
+    workerPlatform: io.platform ?? LINUX,
+    // What this machine has installed never decides: every tool is there unless the fixture
+    // takes it away.
+    which: (name) => (fx.gone.includes(name) ? undefined : `/usr/bin/${name}`),
   });
   return { code, out, err, asked, all: out + err };
 }
@@ -281,7 +313,71 @@ describe('studio setup', () => {
     const r = await setup(fixture({ noGh: true }));
     expect(r.code).toBe(1);
     expect(r.asked).toEqual([]);
-    expect(r.out).toContain('https://cli.github.com');
+    expect(r.out).toContain('Fix: sudo apt-get install -y gh, then gh auth login');
+  });
+
+  it('step 0 sends native Windows and WSL1 to WSL2, and names what is missing with its command', async () => {
+    const win = await setup(fixture(), [], {
+      platform: { platform: 'win32', wsl: 'none', automountRoot: '/mnt/' },
+    });
+    expect(win.code).toBe(1);
+    expect(win.out).toContain('0. This machine: the lead does not run on native Windows');
+    expect(win.out).toContain('wsl --install -d Ubuntu-24.04');
+    expect(win.out).not.toContain('1. GitHub CLI');
+    const wsl1 = await setup(fixture(), [], {
+      platform: { platform: 'linux', wsl: 'wsl1', automountRoot: '/mnt/' },
+      env: { WSL_DISTRO_NAME: 'Ubuntu' },
+    });
+    expect(wsl1.out).toContain('wsl --set-version Ubuntu 2');
+    const bare = await setup(fixture({ noClaude: true }), [], {
+      platform: { platform: 'linux', wsl: 'wsl2', automountRoot: '/mnt/' },
+      env: { WSL_DISTRO_NAME: 'Ubuntu' },
+    });
+    expect(bare.code).toBe(1);
+    expect(bare.out).toContain('0. This machine: WSL2 (Ubuntu); missing: claude');
+    expect(bare.out).toContain('   claude: curl -fsSL https://claude.ai/install.sh | bash');
+    const noBox = await setup(fixture({ noSandbox: true }), [], {
+      platform: { platform: 'linux', wsl: 'wsl2', automountRoot: '/mnt/' },
+    });
+    expect(noBox.out).toContain("missing: bubblewrap and socat (Claude Code's sandbox)");
+    expect(noBox.out).toContain('   sandbox: sudo apt-get install -y bubblewrap socat');
+    expect(bare.asked).toEqual([]);
+    const mac = await setup(fixture({ noClaude: true, noGh: true }), [], {
+      platform: { platform: 'darwin', wsl: 'none', automountRoot: '/mnt/' },
+    });
+    expect(mac.out).toContain('0. This machine: macOS; missing: claude');
+  });
+
+  it("step 0 under WSL2: Studio's own files never on a Windows drive; a project there is a note", async () => {
+    const fx = fixture({ studioOnPath: true });
+    installCrewToken(CREW_VALUE, fx.owner);
+    addAccount(fx.owner, 'main', ACCOUNT_VALUE, new Date('2026-11-01T00:00:00Z'));
+    const onC = await setup(fx, [], {
+      platform: {
+        platform: 'linux',
+        wsl: 'wsl2',
+        automountRoot: '/mnt/',
+        windowsMounts: [fx.home],
+      },
+      env: { WSL_DISTRO_NAME: 'Ubuntu' },
+    });
+    expect(onC.code).toBe(1);
+    expect(onC.out).toMatch(/Studio's config folder .* is on a Windows drive/);
+    expect(onC.out).toContain('unset XDG_CONFIG_HOME and XDG_STATE_HOME');
+    const project = await setup(fx, [], {
+      platform: {
+        platform: 'linux',
+        wsl: 'wsl2',
+        automountRoot: '/mnt/',
+        windowsMounts: [fx.project],
+      },
+      env: { WSL_DISTRO_NAME: 'Ubuntu' },
+    });
+    expect(project.code).toBe(0);
+    expect(project.out).toMatch(
+      /0\. This machine: done \(WSL2 \(Ubuntu\), git, Node\.js [\d.]+, claude\)/,
+    );
+    expect(project.out).toContain('is on a Windows drive; clone it into the Linux file system');
   });
 
   it('refuses without a terminal and changes nothing', async () => {

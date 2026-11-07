@@ -31,6 +31,7 @@ import { pickCrewCredential } from './crew.js';
 import { TREE_SOURCE } from './crew-accounts.js';
 import { startEgressProxy } from './egress-proxy.js';
 import { HeldError } from './held.js';
+import { installCommand, leadKind, onWindowsDrive } from './lead-machine.js';
 import { activeParks, blockHold, parkUntil, readLimits, writeLimits } from './limits.js';
 import { ensureStateDir, ownerStateRootFor, removeStateEntry, withBoardLock } from './paths.js';
 import { pinnedPlugins, STUDIO_REPOSITORY, STUDIO_VERSION } from './plugins.js';
@@ -1310,8 +1311,27 @@ async function unpair(o: {
   return (await syncAuthorizedKeys({ ...o, exec: o.exec ?? systemExec })) ? 0 : 1;
 }
 
+/** The line for an SSH tool the lead lacks: what to install, on this machine. */
+const missingSsh = (tool: string, platform: WorkerPlatform | undefined): string =>
+  `${tool} is not installed here: ${installCommand('ssh', leadKind(platform ?? detectPlatform()))}, then run this again`;
+
+/**
+ * Under WSL2 the lead's key and the pinned host keys must lie in the Linux file system: on a
+ * Windows drive their mode stays open, and ssh refuses a private key others could read.
+ */
+function leadFilesProblem(owner: OwnerEnv, key: string, platform: WorkerPlatform): void {
+  for (const dir of [dirname(key), join(ownerStateRootFor(owner), 'relay')]) {
+    if (onWindowsDrive(dir, platform)) {
+      throw new Error(
+        `${dir} is on a Windows drive, which keeps no file modes, so ssh would refuse the key: unset XDG_CONFIG_HOME and XDG_STATE_HOME (or point them below ~ in the Linux file system), then run this again`,
+      );
+    }
+  }
+}
+
 /** `studio relay pair <label> <host>` on the lead: the key and the one pairing line. */
 async function pairStart(o: {
+  platform?: WorkerPlatform;
   label: string;
   host: string;
   values: RelayValues;
@@ -1330,6 +1350,7 @@ async function pairStart(o: {
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(user)) throw new Error('--user: a local user name');
   const exec = o.exec ?? systemExec;
   const key = leadKeyFile(o.owner, o.label);
+  leadFilesProblem(o.owner, key, o.platform ?? detectPlatform());
   mkdirSync(dirname(key), { recursive: true, mode: 0o700 });
   // A key paired before is replaced: the worker gets the new line, the old one goes with it.
   rmSync(key, { force: true });
@@ -1345,6 +1366,7 @@ async function pairStart(o: {
     '-f',
     key,
   ]);
+  if (made.code === 127) throw new Error(missingSsh('ssh-keygen', o.platform));
   if (made.code !== 0) throw new Error('ssh-keygen could not make the key');
   const pub = readFileSync(`${key}.pub`, 'utf8').trim().split(/\s+/).slice(0, 2).join(' ');
   const secret = newPairSecret();
@@ -1370,6 +1392,7 @@ async function pairStart(o: {
  * then the worker goes into the owner config and the secret is used up.
  */
 async function pairConnect(o: {
+  platform?: WorkerPlatform;
   label: string;
   owner: OwnerEnv;
   ports: Ports;
@@ -1392,6 +1415,7 @@ async function pairConnect(o: {
     String(p.port),
     p.host,
   ]);
+  if (scan.code === 127) throw new Error(missingSsh('ssh-keyscan', o.platform));
   const key = keyscanKey(scan.stdout);
   if (key === undefined) throw new Error(`cannot read the host key of ${p.host}:${p.port}`);
   o.stdout(`host key fingerprint of ${p.host}: ${keyFingerprint(key)}\n`);

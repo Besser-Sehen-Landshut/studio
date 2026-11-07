@@ -14,6 +14,15 @@ import { runAccount } from './account-command.js';
 import { claudeLanguage } from './claude-language.js';
 import { loadOwnerConfig, type OwnerConfig, type OwnerEnv, ownerConfigDir } from './config.js';
 import { ghCheck, githubRepoOf } from './init.js';
+import {
+  installCommand,
+  type LeadKind,
+  type LeadTool,
+  leadKind,
+  leadMachineProblem,
+  onPath,
+  onWindowsDrive,
+} from './lead-machine.js';
 import { validLabel } from './limits.js';
 import { ownerStateRootFor } from './paths.js';
 import type { Ports } from './ports.js';
@@ -32,6 +41,7 @@ import { ensureRea, reaMode, reaVersionOf, recordSetupSkip, setupSkipped } from 
 import { verifyReaInstall } from './rea-install.js';
 import { doctorReport, readPrimaryRepo, runSecretSet } from './secret-command.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
+import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 
 export type SetupOptions = {
   project: string;
@@ -48,6 +58,10 @@ export type SetupOptions = {
   notifications?: boolean;
   /** The absolute path of the plugin's `bin/studio`; undefined when it cannot be told. */
   launcher?: string;
+  /** The machine (tests); detected by default. */
+  platform?: WorkerPlatform;
+  /** Where a program is on PATH (tests); the PATH of `env` by default. */
+  which?: (name: string) => string | undefined;
   stdout(s: string): void;
   stderr(s: string): void;
 };
@@ -422,6 +436,73 @@ async function notificationsStep(o: SetupOptions, again: boolean): Promise<numbe
   return 0;
 }
 
+const MIN_NODE_MAJOR = 24;
+
+/**
+ * Step 0: this machine can run the lead. Native Windows and WSL1 get the command that leads to
+ * WSL2; a missing git, claude or a Node.js older than 24 gets its install command for this machine;
+ * under WSL2 Studio's own files must lie in the Linux file system. False when setup stops here.
+ */
+function machineStep(o: SetupOptions, platform: WorkerPlatform, kind: LeadKind): boolean {
+  const say = (s: string) => o.stdout(`${safe(s)}\n`);
+  const which = o.which ?? ((name: string) => onPath(name, o.env));
+  const problem = leadMachineProblem(kind, o.env);
+  if (problem !== undefined) {
+    say(`0. This machine: ${problem.why}`);
+    say(`   Fix: ${problem.fix}`);
+    return false;
+  }
+  const label =
+    kind === 'macos'
+      ? 'macOS'
+      : kind === 'wsl2'
+        ? `WSL2 (${o.env.WSL_DISTRO_NAME ?? 'Linux'})`
+        : 'Linux';
+  const node = process.versions.node;
+  const missing: LeadTool[] = [
+    ...(which('git') === undefined ? (['git'] as const) : []),
+    ...(Number(node.split('.')[0]) < MIN_NODE_MAJOR ? (['node'] as const) : []),
+    ...(which('claude') === undefined ? (['claude'] as const) : []),
+    ...(kind !== 'macos' && (which('bwrap') === undefined || which('socat') === undefined)
+      ? (['sandbox'] as const)
+      : []),
+  ];
+  if (missing.length > 0) {
+    say(
+      `0. This machine: ${label}; missing: ${missing.map((t) => (t === 'node' ? `Node.js ${MIN_NODE_MAJOR} (this is ${node})` : t === 'sandbox' ? "bubblewrap and socat (Claude Code's sandbox)" : t)).join(', ')}`,
+    );
+    for (const t of missing) say(`   ${t}: ${installCommand(t, kind)}`);
+    say('   Then open a new terminal and run studio setup again.');
+    return false;
+  }
+  if (kind === 'wsl2') {
+    for (const [what, dir] of [
+      ['config', ownerConfigDir(o.owner)],
+      ['state', ownerStateRootFor(o.owner)],
+    ] as const) {
+      if (onWindowsDrive(dir, platform)) {
+        say(
+          `0. This machine: ${label}; Studio's ${what} folder ${dir} is on a Windows drive, which keeps no file modes (tokens and keys there would be open)`,
+        );
+        say(
+          '   Fix: unset XDG_CONFIG_HOME and XDG_STATE_HOME, or point them below ~ in the Linux file system, then run studio setup again.',
+        );
+        return false;
+      }
+    }
+  }
+  say(`0. This machine: done (${label}, git, Node.js ${node}, claude)`);
+  if (kind === 'wsl2' && onWindowsDrive(o.project, platform)) {
+    say(
+      `   Note: the project ${o.project} is on a Windows drive; clone it into the Linux file system (under ~) for speed and exact file modes.`,
+    );
+  }
+  if (which('ssh') === undefined || which('ssh-keygen') === undefined) {
+    say(`   For relay workers later: ssh and ssh-keygen (${installCommand('ssh', kind)}).`);
+  }
+  return true;
+}
+
 /**
  * `studio setup [--link] [--notifications]`: the owner's one-time setup in a terminal. Each step is skipped when it
  * is done; secrets go through `secret set crew-token` and `account add`, never through here.
@@ -437,10 +518,17 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   const home = o.owner.homedir ?? homedir();
   if (o.notifications === true) return await notificationsStep(o, true);
 
+  const platform = o.platform ?? detectPlatform();
+  const kind = leadKind(platform);
+  if (!machineStep(o, platform, kind)) return 1;
+
   const gh = await ghCheck(o.ports);
   if (gh.status !== 'pass') {
     say(`1. GitHub CLI: ${gh.detail}`);
-    say(`   Fix: ${gh.fix ?? 'gh auth login'}, then run studio setup again.`);
+    const fix = gh.fix?.startsWith('install the GitHub CLI')
+      ? `${installCommand('gh', kind)}, then gh auth login`
+      : (gh.fix ?? 'gh auth login');
+    say(`   Fix: ${fix}, then run studio setup again.`);
     return 1;
   }
   say(`1. GitHub CLI: done (${gh.detail})`);

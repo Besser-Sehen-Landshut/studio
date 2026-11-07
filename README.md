@@ -40,6 +40,21 @@ The plugin ships the commands `/studio:init` (set up a project) and `/studio:add
 - Model authentication for crew sessions in the control room's environment: crew sessions get an isolated `HOME`, so they authenticate with `CLAUDE_CODE_OAUTH_TOKEN` (passed through when set), with the Claude login in `CLAUDE_CONFIG_DIR` (default `~/.claude`), or through a credential provider (see [Crew credentials](#crew-credentials-and-usage-limits)). API billing is off by default: `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from the crew's environment because an API key would otherwise take precedence over `CLAUDE_CODE_OAUTH_TOKEN`. Check on the first launch that the crew session starts and authenticates (`studio status`, the crew log in the state root).
 - `sandbox.network_allow` lists every host the crew's shell commands may reach (GitHub for `git` and `gh`, your package registry); everything else is blocked.
 
+### Lead on a Windows PC (WSL2)
+
+The lead runs on macOS, Linux or WSL2, so on a Windows PC it runs in Ubuntu under WSL2; nothing of it runs on Windows itself.
+
+1. In PowerShell as administrator: `wsl --install -d Ubuntu-24.04`, then restart the PC. Ubuntu opens and asks for a user name and password.
+2. In Ubuntu, one command installs what the lead needs (Git, the GitHub CLI, the SSH client for relay workers, bubblewrap and socat for Claude Code's sandbox, Node.js 24 and Claude Code):
+
+   ```bash
+   sudo apt-get update && sudo apt-get install -y git gh openssh-client bubblewrap socat && curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs && curl -fsSL https://claude.ai/install.sh | bash
+   ```
+
+3. Go on with the [Quick start](#quick-start) in that Ubuntu terminal: `claude`, install the plugin, `studio setup --link`.
+
+Keep projects in the Linux file system (`~/...`), not under `/mnt/c`: a Windows drive is slow there and keeps no file modes. `studio setup` checks this first (step 0): native Windows and WSL1 get the command that leads to WSL2, every missing tool its install command, and Studio's own config and state must lie in the Linux file system (a token or an SSH key on a Windows drive would be readable by every Windows program). `studio relay pair` from WSL2 uses Ubuntu's `ssh`, `ssh-keygen` and `ssh-keyscan` and keeps the lead's key and the pinned host key under `~`; it refuses to put them on a Windows drive. Interop with Windows stays on for the lead (only a worker inside WSL2 refuses it).
+
 ## Writing the files by hand
 
 `studio init` writes these files for you. To write them yourself instead, create `.studio/` in the project repository.
