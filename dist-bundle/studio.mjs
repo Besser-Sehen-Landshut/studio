@@ -66817,6 +66817,7 @@ var MIN_NODE_MAJOR2 = 24;
 function machineStep(o2, platform2, kind) {
   const say = (s) => o2.stdout(`${safe(s)}
 `);
+  const which = o2.which ?? ((name) => onPath(name, o2.env));
   const problem = leadMachineProblem(kind, o2.env);
   if (problem !== void 0) {
     say(`0. This machine: ${problem.why}`);
@@ -66826,10 +66827,10 @@ function machineStep(o2, platform2, kind) {
   const label = kind === "macos" ? "macOS" : kind === "wsl2" ? `WSL2 (${o2.env.WSL_DISTRO_NAME ?? "Linux"})` : "Linux";
   const node2 = process.versions.node;
   const missing = [
-    ...onPath("git", o2.env) === void 0 ? ["git"] : [],
+    ...which("git") === void 0 ? ["git"] : [],
     ...Number(node2.split(".")[0]) < MIN_NODE_MAJOR2 ? ["node"] : [],
-    ...onPath("claude", o2.env) === void 0 ? ["claude"] : [],
-    ...kind !== "macos" && (onPath("bwrap", o2.env) === void 0 || onPath("socat", o2.env) === void 0) ? ["sandbox"] : []
+    ...which("claude") === void 0 ? ["claude"] : [],
+    ...kind !== "macos" && (which("bwrap") === void 0 || which("socat") === void 0) ? ["sandbox"] : []
   ];
   if (missing.length > 0) {
     say(
@@ -66861,7 +66862,7 @@ function machineStep(o2, platform2, kind) {
       `   Note: the project ${o2.project} is on a Windows drive; clone it into the Linux file system (under ~) for speed and exact file modes.`
     );
   }
-  if (onPath("ssh", o2.env) === void 0 || onPath("ssh-keygen", o2.env) === void 0) {
+  if (which("ssh") === void 0 || which("ssh-keygen") === void 0) {
     say(`   For relay workers later: ssh and ssh-keygen (${installCommand("ssh", kind)}).`);
   }
   return true;
@@ -70590,6 +70591,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
             notifications: values.notifications === true,
             ...deps.launcher === void 0 ? {} : { launcher: deps.launcher },
             ...deps.workerPlatform === void 0 ? {} : { platform: deps.workerPlatform },
+            ...deps.which === void 0 ? {} : { which: deps.which },
             stdout,
             stderr
           });

@@ -342,6 +342,8 @@ export interface CliDeps {
   launcher?: string;
   /** What `studio worker` can enforce on this machine; read from the system when missing. */
   workerPlatform?: WorkerPlatform;
+  /** Test seam of `studio setup`: where a program is on PATH. */
+  which?: (name: string) => string | undefined;
   /** Test seam: the crew sandbox of a native Windows worker (src/windows-sandbox.ts). */
   windowsWorker?: typeof windowsWorker;
   /** Heartbeat interval during long git calls of a worker, in milliseconds; tests shorten it. */
@@ -4430,6 +4432,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             notifications: values.notifications === true,
             ...(deps.launcher === undefined ? {} : { launcher: deps.launcher }),
             ...(deps.workerPlatform === undefined ? {} : { platform: deps.workerPlatform }),
+            ...(deps.which === undefined ? {} : { which: deps.which }),
             stdout,
             stderr,
           });
